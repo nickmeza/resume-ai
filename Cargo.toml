@@ -8,7 +8,6 @@ edition = "2024"
 license = "MIT"
 rust-version = "1.85"
 repository = "https://github.com/nickmeza/resume-ai"
-homepage = "https://github.com/nickmeza/resume-ai"
 authors = ["Nick Meza"]
 
 [workspace.dependencies]

@@ -5,6 +5,7 @@ use anyhow::{Result, bail};
 use std::collections::HashMap;
 
 /// Variable lookup ignoring case (on Windows it is "Path", not "PATH").
+#[cfg(windows)]
 fn key_of(env: &HashMap<String, String>, name: &str) -> String {
     env.keys().find(|k| k.eq_ignore_ascii_case(name)).cloned().unwrap_or_else(|| name.to_string())
 }
