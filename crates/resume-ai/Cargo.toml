@@ -5,6 +5,16 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["claude", "ai", "agents", "sessions", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+readme = "../../README.md"
+
+# npm: `npm i -g resume-ai-cli` installs the `resume-ai` command (the name resume-ai is taken on npm)
+[package.metadata.dist]
+npm-package = "resume-ai-cli"
 
 [[bin]]
 name = "resume-ai"

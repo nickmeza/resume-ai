@@ -8,6 +8,31 @@ and **Cursor CLI** (experimental).
 > Status: early development. The Rust core, the interactive CLI and the desktop app (Tauri) work;
 > packaging and releases are next. See [ROADMAP.md](ROADMAP.md).
 
+## Install
+
+**Command-line app** (`resume-ai`):
+
+```sh
+# npm / pnpm (any OS with Node.js)
+npm install -g resume-ai-cli
+pnpm add -g resume-ai-cli
+
+# macOS / Linux
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/nickmeza/resume-ai/releases/latest/download/resume-ai-installer.sh | sh
+
+# Windows (PowerShell)
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/nickmeza/resume-ai/releases/latest/download/resume-ai-installer.ps1 | iex"
+```
+
+Then run `resume-ai` (press `?` for the shortcuts).
+
+**Desktop app**: download the installer for your system from the
+[latest release](https://github.com/nickmeza/resume-ai/releases/latest) —
+`.exe` / `.msi` (Windows), `.dmg` (macOS), `.AppImage` / `.deb` / `.rpm` (Linux).
+
+> The installers are not code-signed yet: Windows may show a SmartScreen warning ("More info" → "Run anyway")
+> and macOS may ask you to open the app from System Settings → Privacy & Security.
+
 ## Repository layout
 
 | Path | What it is |

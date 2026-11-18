@@ -7,6 +7,9 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 rust-version = "1.85"
+repository = "https://github.com/nickmeza/resume-ai"
+homepage = "https://github.com/nickmeza/resume-ai"
+authors = ["Nick Meza"]
 
 [workspace.dependencies]
 resume-ai-core = { path = "crates/resume-ai-core" }
@@ -34,3 +37,8 @@ trash = "5"
 lto = true
 codegen-units = 1
 strip = true
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
