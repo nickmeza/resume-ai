@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Resume AI</title>
+  <link rel="stylesheet" href="vendor/xterm.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Texts are filled from the locale files (data-i18n*); the English here is only a fallback -->
+  <div id="app">
+    <aside id="sidebar">
+      <div class="sidebar-header">
+        <span class="brand" data-i18n="tabs.sessions">Sessions</span>
+        <div class="actions">
+          <button id="btn-refresh">⟳</button>
+          <button id="btn-agents" data-i18n-title="ui.sidebar.agents">⚙</button>
+          <button id="btn-settings" data-i18n-title="ui.sidebar.settings">⌨</button>
+        </div>
+      </div>
+      <div class="search-row">
+        <input id="search" type="search" data-i18n-placeholder="ui.search.placeholder" />
+        <button id="btn-filter">
+          <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 2h13l-5 6.2V13l-3 1.5V8.2z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+          <span class="count"></span>
+        </button>
+      </div>
+      <div id="filter-summary" class="hidden"></div>
+      <div id="list"></div>
+      <div id="status"></div>
+    </aside>
+
+    <div id="splitter" data-i18n-title="ui.splitter"></div>
+
+    <main id="main">
+      <div id="tabbar" class="hidden"></div>
+      <div id="term-header" class="hidden">
+        <div class="term-title">
+          <span id="term-name"></span>
+          <span id="term-cwd"></span>
+        </div>
+        <div class="actions">
+          <button id="btn-images" class="hidden">🖼 <span></span></button>
+          <button id="btn-options" data-i18n-title="ui.header.optionsTitle"><span data-i18n="ui.header.options">Options</span> ▾</button>
+          <button id="btn-close" data-i18n-title="ui.header.close">✕</button>
+        </div>
+      </div>
+      <div id="workspace">
+        <div id="terminals"></div>
+        <!-- Images panel of the tab (🖼) -->
+        <aside id="gallery" class="hidden">
+          <div class="gal-head">
+            <span id="gal-title"></span>
+            <span class="spacer"></span>
+            <button id="gal-refresh" data-i18n-title="ui.gallery.refresh">⟳</button>
+            <button id="gal-close" data-i18n-title="ui.gallery.close">✕</button>
+          </div>
+          <div id="gal-body" class="gal-body"></div>
+        </aside>
+      </div>
+      <div id="empty">
+        <div class="empty-inner">
+          <img class="logo" src="logo.svg" alt="" width="72" height="72" />
+          <p data-i18n="ui.empty.title">Pick a session on the left to resume it.</p>
+          <p class="hint" data-i18n-html="ui.empty.hintNew"></p>
+          <p class="hint" data-i18n-html="ui.empty.hintMenu"></p>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Preview of "[Image #N]" -->
+  <div id="img-preview" class="hidden"></div>
+
+  <!-- Filters popup (agents, tags…) -->
+  <div id="filter-pop" class="popover hidden"></div>
+
+  <!-- Floating menu (context menus, new session) -->
+  <div id="menu" class="menu hidden"></div>
+
+  <!-- Agent picker -->
+  <div id="modal" class="modal hidden">
+    <div class="modal-card">
+      <h2 data-i18n="ui.agentsModal.title">Which AI agents do you use?</h2>
+      <p class="muted" data-i18n="ui.agentsModal.desc"></p>
+      <div id="agent-rows"></div>
+      <div class="modal-actions">
+        <button id="btn-redetect" data-i18n="ui.agentsModal.redetect">Detect again</button>
+        <button id="btn-config" data-i18n="ui.agentsModal.editConfig">Edit config.json</button>
+        <span class="spacer"></span>
+        <button id="btn-cancel" data-i18n="ui.cancel">Cancel</button>
+        <button id="btn-save" class="primary" data-i18n="ui.save">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings and shortcuts -->
+  <div id="settings" class="modal hidden">
+    <div class="modal-card">
+      <h2 data-i18n="ui.settings.title">Settings</h2>
+      <h3 data-i18n="ui.settings.general">General</h3>
+      <div class="form-grid">
+        <label for="set-language" data-i18n="ui.settings.language">Language</label>
+        <select id="set-language"></select>
+      </div>
+      <h3 data-i18n="ui.settings.terminal">Terminal</h3>
+      <div class="form-grid">
+        <label for="set-shell" data-i18n="ui.settings.shell">Shell</label>
+        <input id="set-shell" type="text" spellcheck="false" data-i18n-title="ui.settings.shellTitle" />
+        <label for="set-font" data-i18n="ui.settings.fontSize">Font size</label>
+        <input id="set-font" type="number" min="8" max="32" />
+      </div>
+      <h3 data-i18n="ui.settings.shortcuts">Keyboard shortcuts</h3>
+      <p class="muted" data-i18n-html="ui.settings.shortcutsHelp"></p>
+      <div id="shortcut-rows"></div>
+      <p id="sc-note" class="note"></p>
+      <div class="modal-actions">
+        <button id="btn-shortcuts-reset" data-i18n="ui.settings.resetShortcuts">Reset shortcuts</button>
+        <span class="spacer"></span>
+        <button id="btn-settings-cancel" data-i18n="ui.cancel">Cancel</button>
+        <button id="btn-settings-save" class="primary" data-i18n="ui.save">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="vendor/xterm.js"></script>
+  <script src="vendor/addon-fit.js"></script>
+  <script src="api.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

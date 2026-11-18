@@ -1,0 +1,20 @@
+{
+  "name": "resume-ai-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Resume AI desktop app (Tauri)",
+  "license": "MIT",
+  "scripts": {
+    "vendor": "node scripts/vendor.js",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.5"
+  }
+}

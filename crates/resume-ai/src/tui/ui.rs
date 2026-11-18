@@ -1,0 +1,592 @@
+//! Drawing of the interactive mode.
+
+use super::app::{App, FilterRow, Mode, Row};
+use super::keys::Action;
+use ratatui::Frame;
+use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use resume_ai_core::{self as core, i18n::I18n};
+use unicode_width::UnicodeWidthStr;
+
+const ACCENT: Color = Color::Rgb(217, 119, 87);
+const MUTED: Color = Color::Rgb(140, 140, 140);
+const SELECTED_BG: Color = Color::Rgb(62, 42, 34);
+const RUNNING: Color = Color::Rgb(92, 184, 92);
+const WARN: Color = Color::Rgb(217, 165, 87);
+
+fn hex(c: &str) -> Color {
+    let v = u32::from_str_radix(c.trim_start_matches('#'), 16).unwrap_or(0x888888);
+    Color::Rgb((v >> 16) as u8, (v >> 8) as u8, v as u8)
+}
+
+fn badge(agent: &str) -> Span<'static> {
+    let (text, color) = core::by_id(agent).map(|a| (a.badge(), hex(a.color()))).unwrap_or(("??", MUTED));
+    Span::styled(format!(" {text} "), Style::default().bg(color).fg(Color::Black).add_modifier(Modifier::BOLD))
+}
+
+/// Cuts a string to `width` columns, adding "…".
+fn fit(s: &str, width: usize) -> String {
+    if s.width() <= width {
+        return s.to_string();
+    }
+    let mut out = String::new();
+    for c in s.chars() {
+        if out.width() + c.to_string().width() + 1 > width {
+            break;
+        }
+        out.push(c);
+    }
+    out.push('…');
+    out
+}
+
+pub fn time_ago(t: &I18n, ms: f64) -> String {
+    let now = chrono::Utc::now().timestamp_millis() as f64;
+    let mins = ((now - ms) / 60_000.0).max(0.0) as u64;
+    match mins {
+        0 => t.t("time.now"),
+        m if m < 60 => t.tf("time.minutes", &[("n", &m)]),
+        m if m < 60 * 24 => t.tf("time.hours", &[("n", &(m / 60))]),
+        m if m < 60 * 24 * 30 => t.tf("time.days", &[("n", &(m / 60 / 24))]),
+        _ => format_date(ms),
+    }
+}
+
+fn format_date(ms: f64) -> String {
+    chrono::DateTime::from_timestamp_millis(ms as i64)
+        .map(|d| d.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_default()
+}
+
+pub fn draw(f: &mut Frame, app: &mut App) {
+    let [tabs_area, body, status_area] =
+        Layout::vertical([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)]).areas(f.area());
+    app.term_size = (body.height, body.width);
+    draw_tabs(f, app, tabs_area);
+    if app.active == 0 {
+        draw_home(f, app, body);
+    } else {
+        draw_tab(f, app, body);
+    }
+    draw_status(f, app, status_area);
+    draw_popup(f, app);
+}
+
+fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
+    let mut spans = Vec::new();
+    let active = Style::default().bg(ACCENT).fg(Color::Black).add_modifier(Modifier::BOLD);
+    let home = format!(" ≡ {} ({}) ", app.t.t("tabs.sessions"), app.sessions.len());
+    spans.push(Span::styled(home, if app.active == 0 { active } else { Style::default().fg(MUTED) }));
+    for (i, tab) in app.tabs.iter().enumerate() {
+        spans.push(Span::raw(" "));
+        let alive = tab.term.as_ref().is_some_and(|t| t.alive());
+        let style = if app.active == i + 1 {
+            active
+        } else if alive {
+            Style::default()
+        } else {
+            Style::default().fg(MUTED).add_modifier(Modifier::CROSSED_OUT)
+        };
+        spans.push(Span::styled(format!(" {} ", i + 1), style));
+        match &tab.agent {
+            Some(a) => spans.push(badge(a)),
+            None => spans.push(Span::styled(" >_ ", Style::default().bg(Color::DarkGray).fg(Color::White))),
+        }
+        spans.push(Span::styled(format!(" {} ", fit(&tab.title, 22)), style));
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn draw_home(f: &mut Frame, app: &mut App, area: Rect) {
+    let filters = app.active_filter_labels();
+    let [search_area, chips_area, main] =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(if filters.is_empty() { 0 } else { 1 }), Constraint::Min(1)])
+            .areas(area);
+
+    // Search line
+    let searching = matches!(app.mode, Mode::Search);
+    let mut line = vec![Span::styled(" / ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))];
+    if app.search.is_empty() && !searching {
+        line.push(Span::styled(app.t.t("search.placeholder"), Style::default().fg(MUTED)));
+    } else {
+        line.push(Span::raw(app.search.clone()));
+    }
+    let visible = app.rows.iter().filter(|r| matches!(r, Row::Session(_))).count() as u64;
+    let count = app.t.plural("agents.sessions", visible, &[]);
+    f.render_widget(Paragraph::new(Line::from(line)), search_area);
+    f.render_widget(
+        Paragraph::new(Span::styled(format!("{count} "), Style::default().fg(MUTED))).alignment(Alignment::Right),
+        search_area,
+    );
+    if searching {
+        f.set_cursor_position(Position::new(search_area.x + 3 + app.search.width() as u16, search_area.y));
+    }
+    if !filters.is_empty() {
+        let text = app.t.tf("filter.active", &[("list", &filters.join(", "))]);
+        f.render_widget(Paragraph::new(Span::styled(format!(" {text}"), Style::default().fg(ACCENT))), chips_area);
+    }
+
+    let show_details = main.width >= 100;
+    let [list_area, details_area] = if show_details {
+        Layout::horizontal([Constraint::Percentage(62), Constraint::Percentage(38)]).areas(main)
+    } else {
+        [main, Rect::default()]
+    };
+    draw_list(f, app, list_area);
+    if show_details {
+        draw_details(f, app, details_area);
+    }
+}
+
+fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
+    let width = area.width.saturating_sub(2) as usize;
+    let items: Vec<ListItem> = app
+        .rows
+        .iter()
+        .map(|row| match row {
+            Row::Group { name, cwd, count } => {
+                let mut spans = vec![
+                    Span::styled(format!(" ▾ {}", name.to_uppercase()), Style::default().fg(MUTED).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!("  {count}"), Style::default().fg(MUTED)),
+                ];
+                if let Some(c) = cwd {
+                    let rest = width.saturating_sub(name.width() + count.to_string().width() + 6);
+                    if rest > 10 {
+                        spans.push(Span::styled(format!("  {}", fit(c, rest)), Style::default().fg(Color::DarkGray)));
+                    }
+                }
+                ListItem::new(Line::from(spans))
+            }
+            Row::Session(i) => {
+                let s = &app.sessions[*i];
+                let open = app.tab_open_for(&s.key).map(|t| app.tabs[t].term.as_ref().is_some_and(|x| x.alive()));
+                let dot = match open {
+                    Some(true) => Span::styled(" ● ", Style::default().fg(RUNNING)),
+                    Some(false) => Span::styled(" ○ ", Style::default().fg(MUTED)),
+                    None => Span::raw("   "),
+                };
+                // Extra info gives way to the title: the branch goes first, then the origin tag
+                let mut parts = vec![time_ago(&app.t, s.mtime)];
+                let origin = s.origin.as_deref().filter(|o| *o != "cli").map(|o| format!("[{}]", app.t.origin(o)));
+                let branch = s.git_branch.as_deref().filter(|b| *b != "HEAD").map(|b| format!("⎇ {}", fit(b, 16)));
+                for extra in [origin, branch].into_iter().flatten() {
+                    let with = parts.iter().map(|p| p.width() + 2).sum::<usize>() + extra.width();
+                    if width.saturating_sub(3 + 5 + 2 + with) >= width * 55 / 100 {
+                        parts.insert(1, extra);
+                    }
+                }
+                let meta = parts.join("  ");
+                let title_width = width.saturating_sub(3 + 5 + meta.width() + 2);
+                let title = fit(&app.title_of(s), title_width);
+                let pad = width.saturating_sub(3 + 5 + title.width() + meta.width());
+                ListItem::new(Line::from(vec![
+                    dot,
+                    badge(&s.agent),
+                    Span::raw(" "),
+                    Span::raw(title),
+                    Span::raw(" ".repeat(pad)),
+                    Span::styled(meta, Style::default().fg(MUTED)),
+                ]))
+            }
+        })
+        .collect();
+    let empty = items.is_empty();
+    let list =
+        List::new(items).highlight_style(Style::default().bg(SELECTED_BG).add_modifier(Modifier::BOLD)).highlight_symbol("▌");
+    f.render_stateful_widget(list, area, &mut app.list);
+    if empty {
+        let key =
+            if app.search.is_empty() && app.filters.values().all(|v| v.is_empty()) { "list.empty" } else { "list.noResults" };
+        f.render_widget(Paragraph::new(Span::styled(format!("  {}", app.t.t(key)), Style::default().fg(MUTED))), area);
+    }
+}
+
+fn draw_details(f: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::LEFT)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(Span::styled(format!(" {} ", app.t.t("details.title")), Style::default().fg(MUTED)));
+    let Some(s) = app.selected_session() else {
+        f.render_widget(block, area);
+        return;
+    };
+    let label = |k: &str| Span::styled(format!("{}: ", app.t.t(k)), Style::default().fg(MUTED));
+    let agent = core::by_id(&s.agent).map(|a| a.name()).unwrap_or(&s.agent);
+    // The title can be a whole first prompt: at most 3 lines so the fields stay visible
+    let title = fit(&app.title_of(s), area.width.saturating_sub(2) as usize * 3);
+    let mut lines = vec![
+        Line::from(Span::styled(title, Style::default().add_modifier(Modifier::BOLD))),
+        Line::raw(""),
+        Line::from(vec![label("details.agent"), badge(&s.agent), Span::raw(format!(" {agent}"))]),
+        Line::from(vec![label("details.folder"), Span::raw(s.cwd.clone().unwrap_or_else(|| app.t.t("session.unknownFolder")))]),
+    ];
+    if let Some(b) = s.git_branch.as_ref().filter(|b| *b != "HEAD") {
+        lines.push(Line::from(vec![label("details.branch"), Span::raw(b.clone())]));
+    }
+    if let Some(o) = &s.origin {
+        lines.push(Line::from(vec![label("details.createdIn"), Span::raw(app.t.origin(o))]));
+        if let Some(last) = s.last_origin.as_ref().filter(|l| *l != o) {
+            lines.push(Line::from(vec![label("details.lastUsedIn"), Span::raw(app.t.origin(last))]));
+        }
+    }
+    lines.push(Line::from(vec![
+        label("details.lastActivity"),
+        Span::raw(format!("{} ({})", format_date(s.mtime), time_ago(&app.t, s.mtime))),
+    ]));
+    lines.push(Line::from(vec![label("details.id"), Span::styled(s.id.clone(), Style::default().fg(Color::DarkGray))]));
+    f.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), area);
+}
+
+fn draw_tab(f: &mut Frame, app: &mut App, area: Rect) {
+    let idx = app.active - 1;
+    let t = &app.t;
+    let close = app.keys.label(Action::CloseTab);
+    let tab = &mut app.tabs[idx];
+    let Some(term) = tab.term.as_mut() else {
+        let msg = t.tf("tab.error", &[("error", &tab.error.clone().unwrap_or_default())]);
+        let p = Paragraph::new(vec![
+            Line::raw(""),
+            Line::styled(msg, Style::default().fg(WARN)),
+            Line::raw(""),
+            Line::styled(t.t("tab.errorHint"), Style::default().fg(MUTED)),
+        ])
+        .alignment(Alignment::Center)
+        .wrap(Wrap { trim: true });
+        f.render_widget(p, area);
+        return;
+    };
+    term.resize(area.height, area.width);
+    if let Some((x, y)) = term.render(area, f.buffer_mut()) {
+        f.set_cursor_position(Position::new(x, y));
+    }
+    if let Some(code) = term.exit_code {
+        let msg = t.tf("tab.exited", &[("code", &code), ("close", &close)]);
+        let bar = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1);
+        f.render_widget(Clear, bar);
+        f.render_widget(
+            Paragraph::new(Span::styled(format!(" {msg}"), Style::default().bg(Color::DarkGray).fg(Color::White))),
+            bar,
+        );
+    }
+    if term.scroll > 0 {
+        let msg = format!(" {} ", t.tf("tab.scrolled", &[("n", &term.scroll)]));
+        let w = msg.width() as u16;
+        let r = Rect::new(area.right().saturating_sub(w), area.y, w.min(area.width), 1);
+        f.render_widget(Paragraph::new(Span::styled(msg, Style::default().bg(ACCENT).fg(Color::Black))), r);
+    }
+}
+
+fn draw_status(f: &mut Frame, app: &App, area: Rect) {
+    let (text, style) = if let Some((msg, _)) = &app.status {
+        (msg.clone(), Style::default().fg(ACCENT))
+    } else if let Some(err) = app.load_errors.first().filter(|_| app.active == 0) {
+        (format!("⚠ {err}"), Style::default().fg(WARN))
+    } else if app.active == 0 {
+        (app.t.t("hints.home"), Style::default().fg(MUTED))
+    } else {
+        let k = |a| app.keys.label(a);
+        let text = app.t.tf(
+            "hints.tab",
+            &[
+                ("prev", &k(Action::PrevTab)),
+                ("next", &k(Action::NextTab)),
+                ("home", &k(Action::Home)),
+                ("close", &k(Action::CloseTab)),
+                ("scroll", &k(Action::ScrollUp)),
+            ],
+        );
+        (text, Style::default().fg(MUTED))
+    };
+    f.render_widget(
+        Paragraph::new(Span::styled(format!(" {}", fit(&text, area.width.saturating_sub(12) as usize)), style)),
+        area,
+    );
+    f.render_widget(
+        Paragraph::new(Span::styled("resume-ai ", Style::default().fg(Color::DarkGray))).alignment(Alignment::Right),
+        area,
+    );
+}
+
+fn popup_area(area: Rect, width: u16, height: u16) -> Rect {
+    let w = width.min(area.width.saturating_sub(4));
+    let h = height.min(area.height.saturating_sub(2));
+    Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h)
+}
+
+fn popup_block(title: String) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT))
+        .title(Span::styled(format!(" {title} "), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)))
+}
+
+fn hint(text: String) -> Line<'static> {
+    Line::styled(text, Style::default().fg(MUTED))
+}
+
+fn draw_popup(f: &mut Frame, app: &App) {
+    let screen = f.area();
+    let t = &app.t;
+    match &app.mode {
+        Mode::Normal | Mode::Search => {}
+        Mode::Filter { cursor } => {
+            let rows = app.filter_rows();
+            let items: Vec<ListItem> = rows
+                .iter()
+                .map(|r| match r {
+                    FilterRow::Header(h) => {
+                        ListItem::new(Line::styled(h.to_uppercase(), Style::default().fg(MUTED).add_modifier(Modifier::BOLD)))
+                    }
+                    FilterRow::Option { group, value, label, color, count } => {
+                        let on = app.filters.get(group).is_some_and(|v| v.contains(value));
+                        let mut spans = vec![Span::styled(
+                            if on { " [x] " } else { " [ ] " },
+                            Style::default().fg(if on { ACCENT } else { MUTED }),
+                        )];
+                        if let Some(c) = color {
+                            spans.push(Span::styled("● ", Style::default().fg(hex(c))));
+                        }
+                        spans.push(Span::raw(label.clone()));
+                        spans.push(Span::styled(format!("  {count}"), Style::default().fg(MUTED)));
+                        ListItem::new(Line::from(spans))
+                    }
+                })
+                .collect();
+            let area = popup_area(screen, 44, rows.len() as u16 + 4);
+            f.render_widget(Clear, area);
+            let block = popup_block(t.t("filter.title"));
+            let inner = block.inner(area);
+            f.render_widget(block, area);
+            let [list_area, hint_area] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
+            let mut state = ListState::default().with_selected(Some(*cursor));
+            f.render_stateful_widget(List::new(items).highlight_style(Style::default().bg(SELECTED_BG)), list_area, &mut state);
+            f.render_widget(Paragraph::new(hint(t.t("filter.hint"))), hint_area);
+        }
+        Mode::Rename { input } => {
+            let Some(s) = app.selected_session() else { return };
+            let agent = core::by_id(&s.agent);
+            let note = if agent.is_some_and(|a| a.native_rename()) {
+                t.tf("rename.hintNative", &[("agent", &agent.map(|a| a.name()).unwrap_or(""))])
+            } else {
+                t.tf("rename.hintAlias", &[("agent", &agent.map(|a| a.name()).unwrap_or(""))])
+            };
+            let area = popup_area(screen, 70, 6);
+            f.render_widget(Clear, area);
+            let block = popup_block(t.t("rename.title"));
+            let inner = block.inner(area);
+            f.render_widget(block, area);
+            let shown = fit(input, inner.width.saturating_sub(2) as usize);
+            f.render_widget(
+                Paragraph::new(vec![
+                    Line::raw(format!(" {shown}")),
+                    Line::raw(""),
+                    hint(format!(" {note}")),
+                    hint(format!(" {}", t.t("rename.keys"))),
+                ]),
+                inner,
+            );
+            f.set_cursor_position(Position::new(inner.x + 1 + shown.width() as u16, inner.y));
+        }
+        Mode::ConfirmDelete => {
+            let Some(s) = app.selected_session() else { return };
+            confirm(f, t.t("delete.title"), t.tf("delete.confirm", &[("title", &fit(&app.title_of(s), 50))]), t.t("delete.note"));
+        }
+        Mode::ConfirmQuit => {
+            confirm(f, t.t("quit.title"), t.plural("quit.confirm", app.running_tabs() as u64, &[]), String::new())
+        }
+        Mode::ConfirmClose(_) => confirm(f, t.t("close.title"), t.t("close.confirm"), String::new()),
+        Mode::Help => draw_help(f, app),
+        Mode::PickAgent { project, cursor, .. } => {
+            let agents = app.cfg.enabled();
+            let items: Vec<ListItem> = agents
+                .iter()
+                .filter_map(|id| core::by_id(id))
+                .map(|a| ListItem::new(Line::from(vec![Span::raw(" "), badge(a.id()), Span::raw(format!(" {}", a.name()))])))
+                .collect();
+            let area = popup_area(screen, 44, agents.len() as u16 + 4);
+            f.render_widget(Clear, area);
+            let block = popup_block(t.tf("new.title", &[("project", project)]));
+            let inner = block.inner(area);
+            f.render_widget(block, area);
+            let [list_area, hint_area] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
+            let mut state = ListState::default().with_selected(Some(*cursor));
+            f.render_stateful_widget(List::new(items).highlight_style(Style::default().bg(SELECTED_BG)), list_area, &mut state);
+            f.render_widget(Paragraph::new(hint(t.t("new.hint"))), hint_area);
+        }
+        Mode::Images { session, messages, cursor } => {
+            let s = &app.sessions[*session];
+            let mut items = Vec::new();
+            let mut selected = None;
+            let mut flat = 0;
+            for (mi, m) in messages.iter().enumerate() {
+                let when = if mi == 0 {
+                    format!("{} · {}", t.t("images.latest"), time_ago(t, m.timestamp))
+                } else {
+                    time_ago(t, m.timestamp)
+                };
+                let origin = m.origin.as_deref().map(|o| format!(" · {}", t.origin(o))).unwrap_or_default();
+                items.push(ListItem::new(Line::styled(
+                    format!(" {when}{origin}"),
+                    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                )));
+                if !m.text.is_empty() {
+                    items.push(ListItem::new(Line::styled(format!("   {}", fit(&m.text, 70)), Style::default().fg(MUTED))));
+                }
+                for img in &m.images {
+                    if flat == *cursor {
+                        selected = Some(items.len());
+                    }
+                    flat += 1;
+                    let n = img.n.map(|n| format!("#{n}")).unwrap_or_else(|| "  ".into());
+                    let name = img
+                        .path
+                        .as_ref()
+                        .and_then(|p| p.file_name())
+                        .map(|f| f.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    items.push(ListItem::new(Line::from(vec![
+                        Span::styled(format!("   {n:<4}"), Style::default().add_modifier(Modifier::BOLD)),
+                        Span::raw(name),
+                        Span::styled(format!("  {} KB", img.size / 1024), Style::default().fg(MUTED)),
+                    ])));
+                }
+            }
+            let area = popup_area(screen, 80, items.len() as u16 + 4);
+            f.render_widget(Clear, area);
+            let block = popup_block(t.tf("images.title", &[("title", &fit(&app.title_of(s), 50))]));
+            let inner = block.inner(area);
+            f.render_widget(block, area);
+            let [list_area, hint_area] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
+            let mut state = ListState::default().with_selected(selected);
+            f.render_stateful_widget(List::new(items).highlight_style(Style::default().bg(SELECTED_BG)), list_area, &mut state);
+            f.render_widget(Paragraph::new(hint(t.t("images.hint"))), hint_area);
+        }
+    }
+}
+
+fn confirm(f: &mut Frame, title: String, question: String, note: String) {
+    let area = popup_area(f.area(), 64, if note.is_empty() { 5 } else { 7 });
+    f.render_widget(Clear, area);
+    let block = popup_block(title);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let mut lines = vec![Line::raw(""), Line::raw(format!(" {question}"))];
+    if !note.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(hint(format!(" {note}")));
+    }
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+fn draw_help(f: &mut Frame, app: &App) {
+    let t = &app.t;
+    let k = |a| app.keys.label(a);
+    let sections: Vec<(String, Vec<(String, String)>)> = vec![
+        (
+            t.t("help.list"),
+            vec![
+                ("↑ ↓ / j k".into(), t.t("help.move")),
+                ("Enter".into(), t.t("help.open")),
+                ("/".into(), t.t("help.search")),
+                ("f".into(), t.t("help.filters")),
+                ("n".into(), t.t("help.new")),
+                ("c".into(), t.t("help.compact")),
+                ("r / F2".into(), t.t("help.rename")),
+                ("d / Del".into(), t.t("help.delete")),
+                ("i".into(), t.t("help.images")),
+                ("o".into(), t.t("help.folder")),
+                ("t".into(), t.t("help.shell")),
+                ("w".into(), t.t("help.window")),
+                ("R / F5".into(), t.t("help.reload")),
+                ("q".into(), t.t("help.quit")),
+            ],
+        ),
+        (
+            t.t("help.everywhere"),
+            vec![
+                (format!("{} / {}", k(Action::PrevTab), k(Action::NextTab)), t.t("help.tabs")),
+                (format!("Alt+1…9 · {}", k(Action::Home)), t.t("help.gotoTab")),
+                (k(Action::CloseTab), t.t("help.closeTab")),
+                (format!("{} / {}", k(Action::ScrollUp), k(Action::ScrollDown)), t.t("help.scroll")),
+            ],
+        ),
+    ];
+    let mut lines = Vec::new();
+    for (title, rows) in sections {
+        lines.push(Line::styled(format!(" {}", title.to_uppercase()), Style::default().fg(MUTED).add_modifier(Modifier::BOLD)));
+        for (keys, desc) in rows {
+            lines.push(Line::from(vec![Span::styled(format!("  {keys:<31}"), Style::default().fg(ACCENT)), Span::raw(desc)]));
+        }
+        lines.push(Line::raw(""));
+    }
+    lines.push(hint(format!(" {}", t.t("help.config"))));
+    let area = popup_area(f.area(), 90, lines.len() as u16 + 2);
+    f.render_widget(Clear, area);
+    f.render_widget(Paragraph::new(lines).block(popup_block(t.t("help.title"))), area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    fn dump(term: &Terminal<TestBackend>) -> String {
+        let buf = term.backend().buffer();
+        (0..buf.area.height)
+            .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>().trim_end().to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Prints the UI with this machine's real sessions: `cargo test -p resume-ai preview -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn preview() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let lang = std::env::var("PREVIEW_LANG").unwrap_or_else(|_| "es".into());
+        let mut app = App::new(Config::default(), I18n::new(&lang), tx);
+        let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        term.draw(|f| draw(f, &mut app)).unwrap();
+        println!("===== {lang} · list =====\n{}", dump(&term));
+        app.mode = Mode::Filter { cursor: 1 };
+        term.draw(|f| draw(f, &mut app)).unwrap();
+        println!("===== filters =====\n{}", dump(&term));
+        app.mode = Mode::Help;
+        term.draw(|f| draw(f, &mut app)).unwrap();
+        println!("===== help =====\n{}", dump(&term));
+
+        // A tab running a real program
+        app.mode = Mode::Normal;
+        let launch = if cfg!(windows) {
+            super::super::term::Launch {
+                program: "cmd.exe".into(),
+                args: vec!["/d".into(), "/k".into(), "echo agent output here".into()],
+                cwd: None,
+            }
+        } else {
+            super::super::term::Launch {
+                program: "sh".into(),
+                args: vec!["-c".into(), "echo agent output here; sleep 5".into()],
+                cwd: None,
+            }
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.tabs.push(super::super::app::Tab {
+            title: "demo".into(),
+            agent: Some("claude".into()),
+            key: "demo".into(),
+            term: Some(super::super::term::TermTab::spawn(launch, 28, 120, tx).unwrap()),
+            error: None,
+        });
+        app.active = 1;
+        let _ = rx.recv_timeout(std::time::Duration::from_secs(5));
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        term.draw(|f| draw(f, &mut app)).unwrap();
+        println!("===== tab =====\n{}", dump(&term).lines().take(8).collect::<Vec<_>>().join("\n"));
+        println!("…\n{}", dump(&term).lines().last().unwrap_or(""));
+    }
+}

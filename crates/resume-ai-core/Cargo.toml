@@ -1,0 +1,22 @@
+[package]
+name = "resume-ai-core"
+description = "Session discovery and resume commands for AI coding agents"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+md-5.workspace = true
+rayon.workspace = true
+regex.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sys-locale.workspace = true
+trash.workspace = true

@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:" />
+  <title>Agent Sessions</title>
+  <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div class="sidebar-header">
+        <span class="brand">Sesiones</span>
+        <div class="actions">
+          <button id="btn-refresh" title="Recargar (F5)">⟳</button>
+          <button id="btn-agents" title="Elegir agentes">⚙</button>
+          <button id="btn-settings" title="Configuración y atajos de teclado">⌨</button>
+        </div>
+      </div>
+      <div class="search-row">
+        <input id="search" type="search" placeholder="Buscar sesión o proyecto…  (Ctrl+K)" />
+        <button id="btn-filter" title="Filtros">
+          <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 2h13l-5 6.2V13l-3 1.5V8.2z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
+          <span class="count"></span>
+        </button>
+      </div>
+      <div id="filter-summary" class="hidden"></div>
+      <div id="list"></div>
+      <div id="status"></div>
+    </aside>
+
+    <div id="splitter" title="Arrastra para cambiar el tamaño · doble clic = 30/70"></div>
+
+    <main id="main">
+      <div id="tabbar" class="hidden"></div>
+      <div id="term-header" class="hidden">
+        <div class="term-title">
+          <span id="term-name"></span>
+          <span id="term-cwd"></span>
+        </div>
+        <div class="actions">
+          <button id="btn-images" class="hidden" title="Imágenes de esta pestaña">🖼 <span></span></button>
+          <button id="btn-options" title="Más opciones">Opciones ▾</button>
+          <button id="btn-close" title="Cerrar esta pestaña">✕</button>
+        </div>
+      </div>
+      <div id="workspace">
+        <div id="terminals"></div>
+        <!-- Panel de imágenes de la pestaña (🖼) -->
+        <aside id="gallery" class="hidden">
+          <div class="gal-head">
+            <span id="gal-title">Imágenes de la sesión</span>
+            <span class="spacer"></span>
+            <button id="gal-refresh" title="Actualizar">⟳</button>
+            <button id="gal-close" title="Cerrar panel">✕</button>
+          </div>
+          <div id="gal-body" class="gal-body"></div>
+        </aside>
+      </div>
+      <div id="empty">
+        <div class="empty-inner">
+          <div class="logo">✳</div>
+          <p>Elige una sesión de la izquierda para retomarla.</p>
+          <p class="hint">Usa <b>＋</b> junto a un proyecto para iniciar una sesión nueva con el agente que quieras.</p>
+          <p class="hint">Clic derecho en una sesión para renombrarla o eliminarla · <b>⌨</b> para ver y cambiar los atajos.</p>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Vista previa de "[Image #N]" -->
+  <div id="img-preview" class="hidden"></div>
+
+  <!-- Popup de filtros (agentes, tags…) -->
+  <div id="filter-pop" class="popover hidden"></div>
+
+  <!-- Menú flotante: elegir agente para una sesión nueva -->
+  <div id="menu" class="menu hidden"></div>
+
+  <!-- Selector de agentes -->
+  <div id="modal" class="modal hidden">
+    <div class="modal-card">
+      <h2>¿Qué agentes de IA usas?</h2>
+      <p class="muted">Marca los que tienes instalados. Detecté automáticamente los que tienen sesiones o comando en el PATH.</p>
+      <div id="agent-rows"></div>
+      <div class="modal-actions">
+        <button id="btn-redetect">Detectar de nuevo</button>
+        <button id="btn-config">Editar config.json</button>
+        <span class="spacer"></span>
+        <button id="btn-cancel">Cancelar</button>
+        <button id="btn-save" class="primary">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Configuración y atajos -->
+  <div id="settings" class="modal hidden">
+    <div class="modal-card">
+      <h2>Configuración</h2>
+      <h3>Terminal</h3>
+      <div class="form-grid">
+        <label for="set-shell">Shell</label>
+        <input id="set-shell" type="text" spellcheck="false" title="cmd.exe, powershell.exe, pwsh.exe o una ruta completa" />
+        <label for="set-font">Tamaño de fuente</label>
+        <input id="set-font" type="number" min="8" max="32" />
+      </div>
+      <h3>Atajos de teclado</h3>
+      <p class="muted">Haz clic en un atajo y pulsa la nueva combinación. <b>Esc</b> cancela, <b>Supr</b> lo deja sin asignar.</p>
+      <div id="shortcut-rows"></div>
+      <p id="sc-note" class="note"></p>
+      <div class="modal-actions">
+        <button id="btn-shortcuts-reset">Restaurar atajos</button>
+        <span class="spacer"></span>
+        <button id="btn-settings-cancel">Cancelar</button>
+        <button id="btn-settings-save" class="primary">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>
