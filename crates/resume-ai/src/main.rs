@@ -2,6 +2,7 @@
 //! Without a subcommand it opens the interactive mode; subcommands are for scripts.
 
 mod config;
+mod setup;
 mod tui;
 
 use anyhow::{Result, bail};
@@ -58,6 +59,8 @@ enum ConfigAction {
     Path,
     /// Create the config file with commented defaults
     Init,
+    /// Ask the setup questions again (language, width of the sessions list)
+    Setup,
 }
 
 /// Language preference: --lang > RESUME_AI_LANG > config file > system.
@@ -74,7 +77,17 @@ fn language_pref(cli: &Cli, cfg: &config::Config) -> Result<String> {
 }
 
 fn main() -> Result<()> {
+    use std::io::IsTerminal;
     let cli = Cli::parse();
+    // First run of the interactive mode: ask the language and the list width before opening it
+    let wants_setup = matches!(cli.command, Some(Command::Config { action: ConfigAction::Setup }));
+    let first_run = cli.command.is_none() && !config::path().exists() && std::io::stdin().is_terminal();
+    if wants_setup || first_run {
+        setup::run(&config::load().unwrap_or_default())?;
+        if wants_setup {
+            return Ok(());
+        }
+    }
     let file_cfg = match config::load() {
         Ok(c) => c,
         Err(e) => {
@@ -159,6 +172,7 @@ fn main() -> Result<()> {
                 let key = if config::init()? { "config.created" } else { "config.exists" };
                 println!("{}", t.tf(key, &[("path", &config::path().display())]));
             }
+            ConfigAction::Setup => {} // handled before loading the config
         },
     }
     Ok(())

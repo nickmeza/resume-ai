@@ -7,6 +7,9 @@ use std::collections::BTreeMap;
 pub enum Action {
     NextTab,
     PrevTab,
+    /// Switch the keyboard between the sessions list and the terminal
+    ToggleFocus,
+    /// Go to the sessions list
     Home,
     GotoTab(u8),
     CloseTab,
@@ -17,6 +20,7 @@ pub enum Action {
 /// (config name, action, default key). `goto_tab_N` = Alt+N.
 fn defaults() -> Vec<(String, Action, &'static str)> {
     let mut v = vec![
+        ("toggle_focus".to_string(), Action::ToggleFocus, "Alt+S"),
         ("next_tab".to_string(), Action::NextTab, "Shift+Right"),
         ("prev_tab".to_string(), Action::PrevTab, "Shift+Left"),
         ("home".to_string(), Action::Home, "Alt+0"),

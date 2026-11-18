@@ -60,13 +60,17 @@ fn format_date(ms: f64) -> String {
         .unwrap_or_default()
 }
 
+/// Layout: sessions list on the left (always visible, `sidebar_percent` wide), tabs + terminal on the right.
 pub fn draw(f: &mut Frame, app: &mut App) {
-    let [tabs_area, body, status_area] =
-        Layout::vertical([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)]).areas(f.area());
+    let [main, status_area] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(f.area());
+    let pct = app.cfg.sidebar_percent.clamp(10, 60);
+    let [left, right] = Layout::horizontal([Constraint::Percentage(pct), Constraint::Percentage(100 - pct)]).areas(main);
+    draw_sidebar(f, app, left);
+    let [tabs_area, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(right);
     app.term_size = (body.height, body.width);
     draw_tabs(f, app, tabs_area);
     if app.active == 0 {
-        draw_home(f, app, body);
+        draw_welcome(f, app, body);
     } else {
         draw_tab(f, app, body);
     }
@@ -76,9 +80,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
 fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
     let mut spans = Vec::new();
-    let active = Style::default().bg(ACCENT).fg(Color::Black).add_modifier(Modifier::BOLD);
-    let home = format!(" ≡ {} ({}) ", app.t.t("tabs.sessions"), app.sessions.len());
-    spans.push(Span::styled(home, if app.active == 0 { active } else { Style::default().fg(MUTED) }));
+    // The active tab is orange while the keyboard is in the terminal, grey while it is in the list
+    let active = if app.in_terminal() {
+        Style::default().bg(ACCENT).fg(Color::Black).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().bg(Color::DarkGray).fg(Color::White).add_modifier(Modifier::BOLD)
+    };
     for (i, tab) in app.tabs.iter().enumerate() {
         spans.push(Span::raw(" "));
         let alive = tab.term.as_ref().is_some_and(|t| t.alive());
@@ -99,45 +106,64 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_home(f: &mut Frame, app: &mut App, area: Rect) {
+/// Left pane: title, search, active filters and the sessions list. Orange border = keyboard here.
+fn draw_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
+    let focused = !app.in_terminal();
+    let border = if focused { ACCENT } else { Color::DarkGray };
+    let visible = app.rows.iter().filter(|r| matches!(r, Row::Session(_))).count();
+    let title_style = if focused { Style::default().fg(ACCENT).add_modifier(Modifier::BOLD) } else { Style::default().fg(MUTED) };
+    let block = Block::default()
+        .borders(Borders::RIGHT)
+        .border_style(Style::default().fg(border))
+        .title(Span::styled(format!(" ≡ {} ({visible}) ", app.t.t("tabs.sessions")), title_style));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
     let filters = app.active_filter_labels();
-    let [search_area, chips_area, main] =
-        Layout::vertical([Constraint::Length(1), Constraint::Length(if filters.is_empty() { 0 } else { 1 }), Constraint::Min(1)])
-            .areas(area);
+    let [_, search_area, chips_area, list_area] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(if filters.is_empty() { 0 } else { 1 }),
+        Constraint::Min(1),
+    ])
+    .areas(inner);
 
     // Search line
     let searching = matches!(app.mode, Mode::Search);
+    let width = search_area.width.saturating_sub(4) as usize;
     let mut line = vec![Span::styled(" / ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))];
     if app.search.is_empty() && !searching {
-        line.push(Span::styled(app.t.t("search.placeholder"), Style::default().fg(MUTED)));
+        line.push(Span::styled(fit(&app.t.t("search.placeholder"), width), Style::default().fg(MUTED)));
     } else {
         line.push(Span::raw(app.search.clone()));
     }
-    let visible = app.rows.iter().filter(|r| matches!(r, Row::Session(_))).count() as u64;
-    let count = app.t.plural("agents.sessions", visible, &[]);
     f.render_widget(Paragraph::new(Line::from(line)), search_area);
-    f.render_widget(
-        Paragraph::new(Span::styled(format!("{count} "), Style::default().fg(MUTED))).alignment(Alignment::Right),
-        search_area,
-    );
     if searching {
         f.set_cursor_position(Position::new(search_area.x + 3 + app.search.width() as u16, search_area.y));
     }
     if !filters.is_empty() {
         let text = app.t.tf("filter.active", &[("list", &filters.join(", "))]);
-        f.render_widget(Paragraph::new(Span::styled(format!(" {text}"), Style::default().fg(ACCENT))), chips_area);
+        f.render_widget(Paragraph::new(Span::styled(format!(" {}", fit(&text, width)), Style::default().fg(ACCENT))), chips_area);
     }
-
-    let show_details = main.width >= 100;
-    let [list_area, details_area] = if show_details {
-        Layout::horizontal([Constraint::Percentage(62), Constraint::Percentage(38)]).areas(main)
-    } else {
-        [main, Rect::default()]
-    };
     draw_list(f, app, list_area);
-    if show_details {
-        draw_details(f, app, details_area);
-    }
+}
+
+/// Right pane when no session is open: how to use the app + details of the selected session.
+fn draw_welcome(f: &mut Frame, app: &App, area: Rect) {
+    let t = &app.t;
+    let focus = app.keys.label(Action::ToggleFocus);
+    let lines = vec![
+        Line::raw(""),
+        Line::styled(format!("  {}", t.t("pane.empty.title")), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+        Line::raw(""),
+        Line::raw(format!("  {}", t.t("pane.empty.open"))),
+        Line::raw(format!("  {}", t.tf("pane.empty.focus", &[("focus", &focus)]))),
+        Line::raw(format!("  {}", t.t("pane.empty.help"))),
+        Line::raw(""),
+    ];
+    let [top, details] = Layout::vertical([Constraint::Length(lines.len() as u16), Constraint::Min(1)]).areas(area);
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), top);
+    draw_details(f, app, Rect::new(details.x + 1, details.y, details.width.saturating_sub(2), details.height));
 }
 
 fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
@@ -167,13 +193,14 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     Some(false) => Span::styled(" ○ ", Style::default().fg(MUTED)),
                     None => Span::raw("   "),
                 };
-                // Extra info gives way to the title: the branch goes first, then the origin tag
-                let mut parts = vec![time_ago(&app.t, s.mtime)];
+                // Extra info gives way to the title: the branch goes first, then the origin tag,
+                // and in a narrow list even the time
+                let mut parts = if width >= 34 { vec![time_ago(&app.t, s.mtime)] } else { Vec::new() };
                 let origin = s.origin.as_deref().filter(|o| *o != "cli").map(|o| format!("[{}]", app.t.origin(o)));
                 let branch = s.git_branch.as_deref().filter(|b| *b != "HEAD").map(|b| format!("⎇ {}", fit(b, 16)));
                 for extra in [origin, branch].into_iter().flatten() {
                     let with = parts.iter().map(|p| p.width() + 2).sum::<usize>() + extra.width();
-                    if width.saturating_sub(3 + 5 + 2 + with) >= width * 55 / 100 {
+                    if !parts.is_empty() && width.saturating_sub(3 + 5 + 2 + with) >= width * 55 / 100 {
                         parts.insert(1, extra);
                     }
                 }
@@ -204,10 +231,10 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_details(f: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::LEFT)
-        .border_style(Style::default().fg(Color::DarkGray))
-        .title(Span::styled(format!(" {} ", app.t.t("details.title")), Style::default().fg(MUTED)));
+    let block = Block::default().title(Span::styled(
+        format!("{} ", app.t.t("details.title").to_uppercase()),
+        Style::default().fg(MUTED).add_modifier(Modifier::BOLD),
+    ));
     let Some(s) = app.selected_session() else {
         f.render_widget(block, area);
         return;
@@ -278,29 +305,38 @@ fn draw_tab(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
+/// Bottom bar: where the keyboard is (SESSIONS / TERMINAL) and the keys that work there.
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
+    let k = |a| app.keys.label(a);
+    let in_terminal = app.in_terminal();
     let (text, style) = if let Some((msg, _)) = &app.status {
         (msg.clone(), Style::default().fg(ACCENT))
-    } else if let Some(err) = app.load_errors.first().filter(|_| app.active == 0) {
+    } else if let Some(err) = app.load_errors.first().filter(|_| !in_terminal) {
         (format!("⚠ {err}"), Style::default().fg(WARN))
-    } else if app.active == 0 {
-        (app.t.t("hints.home"), Style::default().fg(MUTED))
+    } else if !in_terminal {
+        (app.t.tf("hints.list", &[("focus", &k(Action::ToggleFocus))]), Style::default().fg(MUTED))
     } else {
-        let k = |a| app.keys.label(a);
         let text = app.t.tf(
-            "hints.tab",
+            "hints.term",
             &[
+                ("focus", &k(Action::ToggleFocus)),
                 ("prev", &k(Action::PrevTab)),
                 ("next", &k(Action::NextTab)),
-                ("home", &k(Action::Home)),
                 ("close", &k(Action::CloseTab)),
                 ("scroll", &k(Action::ScrollUp)),
             ],
         );
         (text, Style::default().fg(MUTED))
     };
+    let (label, label_style) = if in_terminal {
+        (app.t.t("focus.terminal"), Style::default().bg(ACCENT).fg(Color::Black).add_modifier(Modifier::BOLD))
+    } else {
+        (app.t.t("focus.list"), Style::default().bg(Color::DarkGray).fg(Color::White).add_modifier(Modifier::BOLD))
+    };
+    let label = format!(" {label} ");
+    let rest = area.width.saturating_sub(label.width() as u16 + 12) as usize;
     f.render_widget(
-        Paragraph::new(Span::styled(format!(" {}", fit(&text, area.width.saturating_sub(12) as usize)), style)),
+        Paragraph::new(Line::from(vec![Span::styled(label, label_style), Span::styled(format!(" {}", fit(&text, rest)), style)])),
         area,
     );
     f.render_widget(
@@ -507,6 +543,7 @@ fn draw_help(f: &mut Frame, app: &App) {
         (
             t.t("help.everywhere"),
             vec![
+                (format!("{} · Tab", k(Action::ToggleFocus)), t.t("help.focus")),
                 (format!("{} / {}", k(Action::PrevTab), k(Action::NextTab)), t.t("help.tabs")),
                 (format!("Alt+1…9 · {}", k(Action::Home)), t.t("help.gotoTab")),
                 (k(Action::CloseTab), t.t("help.closeTab")),
@@ -583,6 +620,7 @@ mod tests {
             error: None,
         });
         app.active = 1;
+        app.focus_list = false;
         let _ = rx.recv_timeout(std::time::Duration::from_secs(5));
         std::thread::sleep(std::time::Duration::from_millis(800));
         term.draw(|f| draw(f, &mut app)).unwrap();

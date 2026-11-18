@@ -1,7 +1,7 @@
 //! CLI configuration file (`config.toml`).
 //!
 //! Location: `$XDG_CONFIG_HOME/resume-ai/config.toml`, `~/.config/resume-ai/config.toml` on
-//! macOS/Linux, `%APPDATA%\resume-ai\config.toml` on Windows.
+//! macOS/Linux, `%APPDATA%\resume-ai\config.toml` on Windows — or the file named in `RESUME_AI_CONFIG`.
 
 use anyhow::{Context, Result};
 use resume_ai_core::{AgentConfig, default_agent_config};
@@ -14,6 +14,9 @@ pub const TEMPLATE: &str = r#"# resume-ai configuration
 
 # Interface language: "auto" (follow the system), "en" or "es"
 language = "auto"
+
+# Width of the sessions list in the interactive mode, in % of the screen (10–60)
+sidebar_percent = 25
 
 # Agents to show (empty = all). Ids: claude, codex, gemini, opencode, copilot, cursor
 # enabled_agents = ["claude", "codex"]
@@ -39,15 +42,25 @@ pub fn template() -> String {
 #[serde(default)]
 pub struct Config {
     pub language: String,
+    /// Width of the sessions list, in % of the screen
+    pub sidebar_percent: u16,
     pub enabled_agents: Vec<String>,
     pub agents: BTreeMap<String, AgentConfig>,
     /// Shortcut overrides, see `tui::keys`.
     pub keys: BTreeMap<String, String>,
 }
 
+pub const DEFAULT_SIDEBAR_PERCENT: u16 = 25;
+
 impl Default for Config {
     fn default() -> Self {
-        Config { language: "auto".into(), enabled_agents: Vec::new(), agents: BTreeMap::new(), keys: BTreeMap::new() }
+        Config {
+            language: "auto".into(),
+            sidebar_percent: DEFAULT_SIDEBAR_PERCENT,
+            enabled_agents: Vec::new(),
+            agents: BTreeMap::new(),
+            keys: BTreeMap::new(),
+        }
     }
 }
 
@@ -77,7 +90,11 @@ impl Config {
     }
 }
 
+/// The `RESUME_AI_CONFIG` environment variable points to another file (handy for tests and dotfiles).
 pub fn path() -> PathBuf {
+    if let Some(p) = std::env::var_os("RESUME_AI_CONFIG").filter(|p| !p.is_empty()) {
+        return PathBuf::from(p);
+    }
     let base = if cfg!(windows) {
         dirs::config_dir()
     } else {
@@ -107,9 +124,44 @@ pub fn init() -> Result<bool> {
     Ok(true)
 }
 
+/// Sets `key = value` among the top-level settings of a TOML text, keeping comments and everything else.
+fn set_top_level(text: &str, key: &str, value: &str) -> String {
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let end = lines.iter().position(|l| l.trim_start().starts_with('[')).unwrap_or(lines.len());
+    let line = format!("{key} = {value}");
+    match lines[..end].iter().position(|l| l.split('=').next().is_some_and(|k| k.trim() == key)) {
+        Some(i) => lines[i] = line,
+        None => lines.insert(end, line),
+    }
+    lines.join("\n") + "\n"
+}
+
+/// Saves the answers of the setup (language and list width), creating the file if needed.
+pub fn save_basics(language: &str, sidebar_percent: u16) -> Result<()> {
+    let p = path();
+    let text = std::fs::read_to_string(&p).unwrap_or_else(|_| template());
+    let text = set_top_level(&text, "language", &format!("\"{language}\""));
+    let text = set_top_level(&text, "sidebar_percent", &sidebar_percent.to_string());
+    std::fs::create_dir_all(p.parent().context("config path without parent")?)?;
+    std::fs::write(&p, text)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn setup_answers_replace_the_values_and_keep_the_rest() {
+        let text = set_top_level(&template(), "language", "\"es\"");
+        let text = set_top_level(&text, "sidebar_percent", "30");
+        let c: Config = toml::from_str(&text).unwrap();
+        assert_eq!((c.language.as_str(), c.sidebar_percent), ("es", 30));
+        assert!(text.contains("# Per-agent overrides")); // comments kept
+        // A file without the keys gets them before the first [section]
+        let text = set_top_level("[agents.claude]\ncommand = \"claude\"\n", "sidebar_percent", "40");
+        assert!(text.starts_with("sidebar_percent = 40\n[agents.claude]"));
+    }
 
     #[test]
     fn template_parses_to_defaults() {

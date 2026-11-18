@@ -58,8 +58,10 @@ pub struct App {
     pub filters: BTreeMap<&'static str, BTreeSet<String>>,
     pub mode: Mode,
     pub tabs: Vec<Tab>,
-    /// 0 = sessions list, n = tabs[n - 1]
+    /// Tab shown on the right: n = tabs[n - 1], 0 = none open
     pub active: usize,
+    /// Where the keys go: the sessions list (left) or the active tab's terminal (right)
+    pub focus_list: bool,
     pub status: Option<(String, Instant)>,
     pub term_size: (u16, u16),
     notify: Sender<()>,
@@ -85,6 +87,7 @@ impl App {
             tabs: Vec::new(),
             active: 0,
             status: None,
+            focus_list: true,
             term_size: (24, 80),
             notify,
             quit: false,
@@ -260,6 +263,7 @@ impl App {
         };
         self.tabs.push(Tab { title, agent, key, term, error });
         self.active = self.tabs.len();
+        self.focus_list = false; // a new tab is ready to type in
         self.active
     }
 
@@ -277,6 +281,7 @@ impl App {
         let s = self.sessions[i].clone();
         if let Some(t) = self.tab_open_for(&s.key) {
             self.active = t + 1;
+            self.focus_list = false;
             return;
         }
         match self.launch_for(&s.agent, LaunchMode::Resume, Some(&s.id), s.cwd.as_deref()) {
@@ -374,6 +379,14 @@ impl App {
         } else if self.active == n {
             self.active = n.min(self.tabs.len()); // the tab that took its place, or the previous one
         }
+        if self.active == 0 {
+            self.focus_list = true; // nothing left on the right
+        }
+    }
+
+    /// Whether the keys go to a terminal (focus on the right and a tab open).
+    pub fn in_terminal(&self) -> bool {
+        !self.focus_list && self.active > 0
     }
 
     /// Called on every loop turn: exit detection and the pending compact command.
@@ -519,7 +532,7 @@ impl App {
                 self.rebuild();
             }
             Mode::Rename { input } => input.push_str(&text),
-            _ if self.active > 0 => {
+            _ if !self.focus_list && self.active > 0 => {
                 if let Some(term) = self.tabs.get_mut(self.active - 1).and_then(|t| t.term.as_mut()) {
                     term.paste(&text);
                 }
@@ -538,7 +551,7 @@ impl App {
             self.on_action(action);
             return;
         }
-        if self.active > 0 {
+        if self.in_terminal() {
             self.on_tab_key(key);
         } else {
             self.on_list_key(key);
@@ -546,12 +559,22 @@ impl App {
     }
 
     fn on_action(&mut self, action: Action) {
-        let n = self.tabs.len() + 1; // including the sessions list
+        let n = self.tabs.len();
         match action {
-            Action::NextTab => self.active = (self.active + 1) % n,
-            Action::PrevTab => self.active = (self.active + n - 1) % n,
-            Action::Home => self.active = 0,
-            Action::GotoTab(i) if (i as usize) <= self.tabs.len() => self.active = i as usize,
+            // Switching tabs always lands in the terminal
+            Action::NextTab | Action::PrevTab if n > 0 => {
+                let cur = self.active.max(1) - 1;
+                let next = if action == Action::NextTab { (cur + 1) % n } else { (cur + n - 1) % n };
+                self.active = next + 1;
+                self.focus_list = false;
+            }
+            Action::NextTab | Action::PrevTab => {}
+            Action::ToggleFocus => self.focus_list = !self.focus_list || self.active == 0,
+            Action::Home => self.focus_list = true,
+            Action::GotoTab(i) if (i as usize) <= n => {
+                self.active = i as usize;
+                self.focus_list = false;
+            }
             Action::GotoTab(_) => {}
             Action::CloseTab if self.active > 0 => {
                 let alive = self.tabs[self.active - 1].term.as_ref().is_some_and(|t| t.alive());
@@ -601,6 +624,8 @@ impl App {
             KeyCode::Home | KeyCode::Char('g') => self.move_cursor(-100_000),
             KeyCode::End | KeyCode::Char('G') => self.move_cursor(100_000),
             KeyCode::Enter => self.open_selected(),
+            // Tab = go to the terminal on the right (if one is open)
+            KeyCode::Tab if self.active > 0 => self.focus_list = false,
             KeyCode::Char('/') => self.mode = Mode::Search,
             KeyCode::Esc if !self.search.is_empty() => {
                 self.search.clear();
