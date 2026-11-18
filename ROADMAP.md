@@ -76,9 +76,9 @@ resume-ai/
 - [ ] Test on macOS and Linux
 
 ### 5. Packaging & releases (GitHub Actions)
-- [ ] CLI with **cargo-dist**: binaries for Windows/macOS/Linux (x64 + arm64), shell & PowerShell
+- [x] CLI with **cargo-dist**: binaries for Windows/macOS/Linux (x64 + arm64), shell & PowerShell
       installers, npm package `resume-ai-cli` (`npm i -g resume-ai-cli`, `pnpm add -g resume-ai-cli`), Homebrew tap
-- [ ] Desktop with **tauri-action**: NSIS `.exe` + `.msi`, universal `.dmg`, `.AppImage`/`.deb`/`.rpm`
+- [x] Desktop with **tauri-action**: NSIS `.exe` + `.msi`, universal `.dmg`, `.AppImage`/`.deb`/`.rpm`
 - [ ] Auto-update for the desktop app (Tauri updater)
 - [ ] Code signing: Windows (avoid SmartScreen warnings), macOS notarization (Apple Developer account)
 
@@ -88,8 +88,8 @@ resume-ai/
 - [ ] Test every provider's data paths on each OS
 
 ### 7. Public launch
-- [ ] README with screenshots/GIFs, install instructions per platform
-- [ ] CI: `cargo fmt`, `clippy`, tests on Windows/macOS/Linux
+- [x] README with install instructions per platform (screenshots/GIFs still to add)
+- [x] CI: `cargo fmt`, `clippy`, tests on Windows/macOS/Linux
 - [ ] Issue/PR templates, changelog, first tagged release
 
 ## Open decisions

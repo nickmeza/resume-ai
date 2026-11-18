@@ -3305,7 +3305,7 @@ dependencies = [
 
 [[package]]
 name = "resume-ai"
-version = "0.1.0-beta.3"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3323,7 +3323,7 @@ dependencies = [
 
 [[package]]
 name = "resume-ai-core"
-version = "0.1.0-beta.3"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3342,7 +3342,7 @@ dependencies = [
 
 [[package]]
 name = "resume-ai-desktop"
-version = "0.1.0-beta.3"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "arboard",
