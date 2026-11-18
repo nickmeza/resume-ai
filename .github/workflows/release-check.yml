@@ -1,0 +1,30 @@
+# Temporary diagnostic: can GITHUB_TOKEN create (and delete) a draft release in this repository?
+name: Check release permission
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Create a draft release through the REST API
+        run: |
+          set -x
+          gh api -X POST "repos/$REPO/releases" -f tag_name=permission-check -f name=permission-check -F draft=true --jq .id > id.txt || true
+          cat id.txt || true
+      - name: Same with gh release create (what cargo-dist uses)
+        run: |
+          echo test > note.txt
+          gh release create permission-check-2 --repo "$REPO" --draft --title check --notes-file note.txt --target "$GITHUB_SHA" || true
+      - name: Clean up the drafts
+        if: always()
+        run: |
+          gh release delete permission-check --repo "$REPO" --yes --cleanup-tag || true
+          gh release delete permission-check-2 --repo "$REPO" --yes --cleanup-tag || true
