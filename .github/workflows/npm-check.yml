@@ -1,0 +1,20 @@
+# Temporary: checks that the NPM_TOKEN secret works (prints only the npm user name)
+name: Check npm token
+
+on:
+  workflow_dispatch:
+
+jobs:
+  whoami:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+      - name: npm whoami
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          echo "user: $(npm whoami)"
+          if npm view resume-ai-cli name >/dev/null 2>&1; then echo "resume-ai-cli: TAKEN"; else echo "resume-ai-cli: available"; fi

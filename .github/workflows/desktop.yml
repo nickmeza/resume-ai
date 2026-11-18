@@ -1,4 +1,4 @@
-# Builds the desktop installers and attaches them to the GitHub Release that the "Release" workflow
+﻿# Builds the desktop installers and attaches them to the GitHub Release that the "Release" workflow
 # (cargo-dist, CLI) created for the same tag. Can also be run by hand for an existing tag.
 name: Desktop release
 
@@ -38,7 +38,7 @@ jobs:
     env:
       TAG: ${{ github.event.inputs.tag || github.event.workflow_run.head_branch }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ env.TAG }}
       - uses: actions/setup-node@v4
