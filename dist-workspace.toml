@@ -17,3 +17,5 @@ install-path = ["$XDG_BIN_HOME/", "$XDG_DATA_HOME/../bin", "~/.local/bin"]
 install-updater = false
 # Publish the npm package (needs the NPM_TOKEN secret)
 publish-jobs = ["npm"]
+# Build only the packages being released (the desktop app needs GTK on Linux and has its own workflow)
+precise-builds = true
