@@ -64,7 +64,7 @@
   "tab.scrolled": "Historial: {n} líneas arriba · cualquier tecla vuelve",
 
   "hints.list": "Enter: abrir · Tab/{focus}: ir a la terminal · ↑↓: moverse · /: buscar · f: filtros · n: nueva · c: compactar · r: renombrar · d: eliminar · i: imágenes · ?: ayuda · q: salir",
-  "hints.term": "{focus}: volver a la lista de sesiones · {prev}/{next}: cambiar pestaña · {close}: cerrar pestaña · {scroll}: historial",
+  "hints.term": "{focus}: volver a la lista de sesiones · {images}: imágenes · {prev}/{next}: cambiar pestaña · {close}: cerrar pestaña · rueda/{scroll}: historial",
   "focus.list": "SESIONES",
   "focus.terminal": "TERMINAL",
   "pane.empty.title": "Ninguna sesión abierta",
@@ -72,6 +72,9 @@
   "pane.empty.focus": "{focus} o Tab pasa el teclado entre la lista y la terminal.",
   "pane.empty.help": "Pulsa ? para ver todos los atajos.",
   "help.focus": "Pasar entre la lista de sesiones y la terminal",
+  "help.mouse": "Ratón: la rueda desplaza el panel debajo · clic selecciona · doble clic abre · Shift+arrastrar selecciona texto",
+  "help.tabImages": "Imágenes de la sesión abierta (también: clic en [Image #N])",
+  "images.refNotSaved": "La imagen #{n} aún no está guardada en la sesión: Claude la guarda al enviar el mensaje.",
   "setup.title": "configuración inicial",
   "setup.language": "Idioma",
   "setup.languageAuto": "Automático (sistema)",

@@ -64,7 +64,7 @@
   "tab.scrolled": "History: {n} lines up · any key returns",
 
   "hints.list": "Enter: open · Tab/{focus}: go to the terminal · ↑↓: move · /: search · f: filters · n: new · c: compact · r: rename · d: delete · i: images · ?: help · q: quit",
-  "hints.term": "{focus}: back to the sessions list · {prev}/{next}: switch tab · {close}: close tab · {scroll}: history",
+  "hints.term": "{focus}: back to the sessions list · {images}: images · {prev}/{next}: switch tab · {close}: close tab · wheel/{scroll}: history",
   "focus.list": "SESSIONS",
   "focus.terminal": "TERMINAL",
   "pane.empty.title": "No session open",
@@ -72,6 +72,9 @@
   "pane.empty.focus": "{focus} or Tab moves the keyboard between the list and the terminal.",
   "pane.empty.help": "Press ? to see every shortcut.",
   "help.focus": "Switch between the sessions list and the terminal",
+  "help.mouse": "Mouse: the wheel scrolls the pane under it · click selects · double-click opens · Shift+drag selects text",
+  "help.tabImages": "Images of the open session (also: click on [Image #N])",
+  "images.refNotSaved": "Image #{n} is not saved in the session yet: Claude saves it when the message is sent.",
   "setup.title": "first-time setup",
   "setup.language": "Language",
   "setup.languageAuto": "Automatic (system)",

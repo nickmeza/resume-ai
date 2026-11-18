@@ -3,7 +3,8 @@
 use super::keys::{Action, KeyMap};
 use super::term::{Launch, PendingInput, TermTab};
 use crate::config::Config;
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::layout::{Position, Rect};
 use ratatui::widgets::ListState;
 use resume_ai_core::{self as core, AgentConfig, ImageMessage, LaunchMode, Session, aliases, i18n::I18n};
 use std::collections::{BTreeMap, BTreeSet};
@@ -26,7 +27,7 @@ pub enum Mode {
     ConfirmClose(usize),
     Help,
     PickAgent { cwd: String, project: String, cursor: usize },
-    Images { session: usize, messages: Vec<ImageMessage>, cursor: usize },
+    Images { title: String, session_id: String, messages: Vec<ImageMessage>, cursor: usize },
 }
 
 /// One entry of the filter popup.
@@ -42,6 +43,19 @@ pub struct Tab {
     pub key: String,
     pub term: Option<TermTab>,
     pub error: Option<String>,
+    /// Project folder and start time: to find the Claude session of a new tab (its id is not known yet)
+    pub cwd: Option<String>,
+    pub started_ms: f64,
+}
+
+/// Where each pane was drawn (for mouse clicks and the wheel).
+#[derive(Default)]
+pub struct LayoutAreas {
+    pub list: Rect,
+    pub tabs: Rect,
+    pub terminal: Rect,
+    /// (first column, last column + 1, tab number) of each tab in the tab bar
+    pub tab_spans: Vec<(u16, u16, usize)>,
 }
 
 pub struct App {
@@ -64,6 +78,8 @@ pub struct App {
     pub focus_list: bool,
     pub status: Option<(String, Instant)>,
     pub term_size: (u16, u16),
+    pub layout: LayoutAreas,
+    last_click: Option<(Instant, usize)>,
     notify: Sender<()>,
     pub quit: bool,
     counter: usize,
@@ -89,6 +105,8 @@ impl App {
             status: None,
             focus_list: true,
             term_size: (24, 80),
+            layout: LayoutAreas::default(),
+            last_click: None,
             notify,
             quit: false,
             counter: 0,
@@ -257,11 +275,13 @@ impl App {
 
     fn spawn_tab(&mut self, title: String, agent: Option<String>, key: String, launch: Launch) -> usize {
         let (rows, cols) = self.term_size;
+        let cwd = launch.cwd.as_ref().map(|c| c.display().to_string());
+        let started_ms = chrono::Utc::now().timestamp_millis() as f64;
         let (term, error) = match TermTab::spawn(launch, rows, cols, self.notify.clone()) {
             Ok(t) => (Some(t), None),
             Err(e) => (None, Some(format!("{e:#}"))),
         };
-        self.tabs.push(Tab { title, agent, key, term, error });
+        self.tabs.push(Tab { title, agent, key, term, error, cwd, started_ms });
         self.active = self.tabs.len();
         self.focus_list = false; // a new tab is ready to type in
         self.active
@@ -490,21 +510,132 @@ impl App {
         }
     }
 
+    /// Images of the session selected in the list (`i`).
     pub fn show_images(&mut self) {
-        let Some(i) = self.selected_index() else { return };
-        let s = &self.sessions[i];
+        let Some(s) = self.selected_session().cloned() else { return };
+        let title = self.title_of(&s);
+        self.open_images_popup(&s, title);
+    }
+
+    /// Images of the session open in the active tab (Alt+I), also for new tabs once Claude saved them.
+    pub fn show_tab_images(&mut self) {
+        let Some(tab) = self.active.checked_sub(1).and_then(|i| self.tabs.get(i)) else { return };
+        let title = tab.title.clone();
+        match self.tab_session(self.active) {
+            Some(s) => self.open_images_popup(&s, title),
+            None => self.set_status(self.t.t("images.notClaude")),
+        }
+    }
+
+    fn open_images_popup(&mut self, s: &Session, title: String) {
         if s.agent != "claude" {
             self.set_status(self.t.t("images.notClaude"));
             return;
         }
-        let dir = images_dir(&s.id);
-        match core::claude::images(s, Some(&dir)) {
+        match core::claude::images(s, Some(&images_dir(&s.id))) {
             Ok(messages) if messages.is_empty() => self.set_status(self.t.t("images.none")),
             Ok(mut messages) => {
                 messages.reverse(); // newest first
-                self.mode = Mode::Images { session: i, messages, cursor: 0 };
+                self.mode = Mode::Images { title, session_id: s.id.clone(), messages, cursor: 0 };
             }
             Err(e) => self.set_status(format!("{e:#}")),
+        }
+    }
+
+    /// The Claude session of a tab: a listed session, or — for new tabs and compacted copies, whose
+    /// id is not known yet — the newest session of the tab's folder created after the tab opened.
+    fn tab_session(&self, n: usize) -> Option<Session> {
+        let tab = self.tabs.get(n.checked_sub(1)?)?;
+        if tab.agent.as_deref() != Some("claude") {
+            return None;
+        }
+        if let Some(s) = self.sessions.iter().find(|s| s.key == tab.key) {
+            return Some(s.clone());
+        }
+        let claude = core::by_id("claude")?;
+        let dir = core::claude::project_dir(&core::data_dir_of(claude, self.agent_cfg.get("claude")), tab.cwd.as_deref()?);
+        // Sessions already shown by other tabs are not this one
+        let taken: Vec<String> = self
+            .tabs
+            .iter()
+            .filter_map(|t| t.key.strip_prefix("claude:"))
+            .map(|id| id.split(':').next().unwrap_or(id).to_string())
+            .collect();
+        let id = core::claude::find_newest(&dir, tab.started_ms, &taken)?;
+        let mut s = Session::new("claude", id.clone());
+        s.src = Some(dir.join(format!("{id}.jsonl")));
+        Some(s)
+    }
+
+    /// Click on "[Image #N]" in a Claude tab: opens that image with the system viewer.
+    fn open_image_ref(&mut self, n: u64) {
+        let Some(s) = self.tab_session(self.active) else { return };
+        let messages = core::claude::images(&s, Some(&images_dir(&s.id))).unwrap_or_default();
+        // The newest message with that number (Claude may repeat numbers across messages)
+        let hit = messages.iter().rev().flat_map(|m| &m.images).find(|i| i.n == Some(n)).and_then(|i| i.path.clone());
+        match hit {
+            Some(p) => {
+                open_with_system(&p.display().to_string());
+                self.set_status(self.t.tf("images.opened", &[("file", &format!("#{n}"))]));
+            }
+            None => self.set_status(self.t.tf("images.refNotSaved", &[("n", &n)])),
+        }
+    }
+
+    // ---------- Mouse ----------
+
+    /// The mouse is captured so the wheel never reaches the agent as ↑↓ (which would change its prompt).
+    /// Wheel: scrolls the pane under the pointer. Click: focus, select, switch tab, open "[Image #N]".
+    pub fn on_mouse(&mut self, ev: MouseEvent) {
+        let (col, row) = (ev.column, ev.row);
+        let inside = |r: Rect| r.contains(Position::new(col, row));
+        let popup = !matches!(self.mode, Mode::Normal | Mode::Search);
+        match ev.kind {
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                let up = ev.kind == MouseEventKind::ScrollUp;
+                if popup {
+                    if let Mode::Images { cursor, .. } | Mode::Filter { cursor } | Mode::PickAgent { cursor, .. } = &mut self.mode
+                    {
+                        *cursor = if up { cursor.saturating_sub(1) } else { *cursor + 1 };
+                    }
+                } else if inside(self.layout.terminal) && self.active > 0 {
+                    let area = self.layout.terminal;
+                    if let Some(term) = self.tabs[self.active - 1].term.as_mut() {
+                        term.wheel(up, col - area.x, row - area.y);
+                    }
+                } else if inside(self.layout.list) {
+                    self.move_cursor(if up { -3 } else { 3 });
+                }
+            }
+            MouseEventKind::Down(MouseButton::Left) if !popup => {
+                if let Some(&(_, _, n)) =
+                    self.layout.tab_spans.iter().find(|(x0, x1, _)| inside(self.layout.tabs) && col >= *x0 && col < *x1)
+                {
+                    self.active = n;
+                    self.focus_list = false;
+                } else if inside(self.layout.list) {
+                    self.focus_list = true;
+                    let idx = self.list.offset() + (row - self.layout.list.y) as usize;
+                    if matches!(self.rows.get(idx), Some(Row::Session(_))) {
+                        // Second click on the same row (within 0.5 s) opens it
+                        let double = self.list.selected() == Some(idx)
+                            && self.last_click.is_some_and(|(at, r)| r == idx && at.elapsed() < Duration::from_millis(500));
+                        self.list.select(Some(idx));
+                        self.last_click = Some((Instant::now(), idx));
+                        if double {
+                            self.open_selected();
+                        }
+                    }
+                } else if inside(self.layout.terminal) && self.active > 0 {
+                    self.focus_list = false;
+                    let area = self.layout.terminal;
+                    let text = self.tabs[self.active - 1].term.as_ref().map(|t| t.row_text(row - area.y)).unwrap_or_default();
+                    if let Some(n) = image_ref_at(&text, (col - area.x) as usize) {
+                        self.open_image_ref(n);
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -571,6 +702,7 @@ impl App {
             Action::NextTab | Action::PrevTab => {}
             Action::ToggleFocus => self.focus_list = !self.focus_list || self.active == 0,
             Action::Home => self.focus_list = true,
+            Action::Images => self.show_tab_images(),
             Action::GotoTab(i) if (i as usize) <= n => {
                 self.active = i as usize;
                 self.focus_list = false;
@@ -758,7 +890,7 @@ impl App {
                 }
                 Mode::PickAgent { cwd, project, cursor }
             }
-            Mode::Images { session, messages, mut cursor } => {
+            Mode::Images { title, session_id, messages, mut cursor } => {
                 let flat: Vec<&std::path::Path> =
                     messages.iter().flat_map(|m| m.images.iter().filter_map(|i| i.path.as_deref())).collect();
                 match key.code {
@@ -772,14 +904,33 @@ impl App {
                             self.set_status(self.t.tf("images.opened", &[("file", &name)]));
                         }
                     }
-                    KeyCode::Char('a') => open_with_system(&images_dir(&self.sessions[session].id).display().to_string()),
+                    KeyCode::Char('a') => open_with_system(&images_dir(&session_id).display().to_string()),
                     _ => {}
                 }
-                Mode::Images { session, messages, cursor }
+                Mode::Images { title, session_id, messages, cursor }
             }
             Mode::Normal => Mode::Normal,
         };
     }
+}
+
+/// Number of the "[Image #N]" under a column of a terminal line.
+pub fn image_ref_at(line: &str, col: usize) -> Option<u64> {
+    let chars: Vec<char> = line.chars().collect();
+    let text = line;
+    let mut from = 0;
+    while let Some(pos) = text[from..].find("[Image #") {
+        let start_byte = from + pos;
+        let start = text[..start_byte].chars().count();
+        let rest = &text[start_byte + 8..];
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        let end = start + 8 + digits.chars().count(); // index of the closing bracket
+        if !digits.is_empty() && chars.get(end) == Some(&']') && (start..=end).contains(&col) {
+            return digits.parse().ok();
+        }
+        from = start_byte + 8;
+    }
+    None
 }
 
 pub fn filter_value(group: &str, s: &Session) -> String {
@@ -855,5 +1006,20 @@ fn shell_quote(s: &str) -> String {
         s.to_string()
     } else {
         format!("'{}'", s.replace('\'', "'\\''"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::image_ref_at;
+
+    #[test]
+    fn finds_the_image_reference_under_the_click() {
+        let line = "> mira [Image #4] y [Image #12] ñ";
+        assert_eq!(image_ref_at(line, 7), Some(4)); // the opening bracket
+        assert_eq!(image_ref_at(line, 16), Some(4)); // the closing bracket
+        assert_eq!(image_ref_at(line, 17), None);
+        assert_eq!(image_ref_at(line, 25), Some(12));
+        assert_eq!(image_ref_at("[Image #] [Image 3]", 2), None);
     }
 }

@@ -198,6 +198,34 @@ impl TermTab {
         self.scroll = p.screen().scrollback(); // clamped to the available history
     }
 
+    /// Mouse wheel over the terminal. Programs that asked for mouse events get the wheel as mouse events;
+    /// for the rest it scrolls the history. (Never as arrow keys: agents use ↑↓ for their prompt history.)
+    pub fn wheel(&mut self, up: bool, col: u16, row: u16) {
+        let (mode, encoding) = {
+            let p = self.parser.lock().unwrap();
+            (p.screen().mouse_protocol_mode(), p.screen().mouse_protocol_encoding())
+        };
+        if mode == vt100::MouseProtocolMode::None {
+            self.scroll_by(if up { 3 } else { -3 });
+            return;
+        }
+        let button: u8 = if up { 64 } else { 65 };
+        let bytes = match encoding {
+            vt100::MouseProtocolEncoding::Sgr => format!("\x1b[<{button};{};{}M", col + 1, row + 1).into_bytes(),
+            // Classic encoding: one byte per value (positions above 222 cannot be expressed)
+            _ => vec![0x1b, b'[', b'M', 32 + button, 33 + col.min(222) as u8, 33 + row.min(222) as u8],
+        };
+        self.reset_scroll();
+        self.write(&bytes);
+    }
+
+    /// Text of a visible row (to find what was clicked, e.g. "[Image #4]").
+    pub fn row_text(&self, row: u16) -> String {
+        let p = self.parser.lock().unwrap();
+        let (_, cols) = p.screen().size();
+        p.screen().rows(0, cols).nth(row as usize).unwrap_or_default()
+    }
+
     pub fn reset_scroll(&mut self) {
         if self.scroll != 0 {
             self.scroll_by(-(self.scroll as isize));

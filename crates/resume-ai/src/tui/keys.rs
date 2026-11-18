@@ -11,6 +11,8 @@ pub enum Action {
     ToggleFocus,
     /// Go to the sessions list
     Home,
+    /// Images of the session open in the active tab
+    Images,
     GotoTab(u8),
     CloseTab,
     ScrollUp,
@@ -21,6 +23,7 @@ pub enum Action {
 fn defaults() -> Vec<(String, Action, &'static str)> {
     let mut v = vec![
         ("toggle_focus".to_string(), Action::ToggleFocus, "Alt+S"),
+        ("images".to_string(), Action::Images, "Alt+I"),
         ("next_tab".to_string(), Action::NextTab, "Shift+Right"),
         ("prev_tab".to_string(), Action::PrevTab, "Shift+Left"),
         ("home".to_string(), Action::Home, "Alt+0"),

@@ -68,6 +68,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_sidebar(f, app, left);
     let [tabs_area, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(right);
     app.term_size = (body.height, body.width);
+    app.layout.tabs = tabs_area;
+    app.layout.terminal = if app.active > 0 { body } else { Rect::default() };
     draw_tabs(f, app, tabs_area);
     if app.active == 0 {
         draw_welcome(f, app, body);
@@ -78,8 +80,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_popup(f, app);
 }
 
-fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
+fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
     let mut spans = Vec::new();
+    let mut tab_spans = Vec::new(); // clickable ranges
     // The active tab is orange while the keyboard is in the terminal, grey while it is in the list
     let active = if app.in_terminal() {
         Style::default().bg(ACCENT).fg(Color::Black).add_modifier(Modifier::BOLD)
@@ -88,6 +91,7 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
     };
     for (i, tab) in app.tabs.iter().enumerate() {
         spans.push(Span::raw(" "));
+        let start = area.x + spans.iter().map(|s| s.width() as u16).sum::<u16>();
         let alive = tab.term.as_ref().is_some_and(|t| t.alive());
         let style = if app.active == i + 1 {
             active
@@ -102,7 +106,10 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
             None => spans.push(Span::styled(" >_ ", Style::default().bg(Color::DarkGray).fg(Color::White))),
         }
         spans.push(Span::styled(format!(" {} ", fit(&tab.title, 22)), style));
+        let end = area.x + spans.iter().map(|s| s.width() as u16).sum::<u16>();
+        tab_spans.push((start, end, i + 1));
     }
+    app.layout.tab_spans = tab_spans;
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -145,6 +152,7 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
         let text = app.t.tf("filter.active", &[("list", &filters.join(", "))]);
         f.render_widget(Paragraph::new(Span::styled(format!(" {}", fit(&text, width)), Style::default().fg(ACCENT))), chips_area);
     }
+    app.layout.list = list_area;
     draw_list(f, app, list_area);
 }
 
@@ -320,6 +328,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
             "hints.term",
             &[
                 ("focus", &k(Action::ToggleFocus)),
+                ("images", &k(Action::Images)),
                 ("prev", &k(Action::PrevTab)),
                 ("next", &k(Action::NextTab)),
                 ("close", &k(Action::CloseTab)),
@@ -452,8 +461,7 @@ fn draw_popup(f: &mut Frame, app: &App) {
             f.render_stateful_widget(List::new(items).highlight_style(Style::default().bg(SELECTED_BG)), list_area, &mut state);
             f.render_widget(Paragraph::new(hint(t.t("new.hint"))), hint_area);
         }
-        Mode::Images { session, messages, cursor } => {
-            let s = &app.sessions[*session];
+        Mode::Images { title, messages, cursor, .. } => {
             let mut items = Vec::new();
             let mut selected = None;
             let mut flat = 0;
@@ -492,7 +500,7 @@ fn draw_popup(f: &mut Frame, app: &App) {
             }
             let area = popup_area(screen, 80, items.len() as u16 + 4);
             f.render_widget(Clear, area);
-            let block = popup_block(t.tf("images.title", &[("title", &fit(&app.title_of(s), 50))]));
+            let block = popup_block(t.tf("images.title", &[("title", &fit(title, 50))]));
             let inner = block.inner(area);
             f.render_widget(block, area);
             let [list_area, hint_area] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
@@ -544,6 +552,7 @@ fn draw_help(f: &mut Frame, app: &App) {
             t.t("help.everywhere"),
             vec![
                 (format!("{} · Tab", k(Action::ToggleFocus)), t.t("help.focus")),
+                (k(Action::Images), t.t("help.tabImages")),
                 (format!("{} / {}", k(Action::PrevTab), k(Action::NextTab)), t.t("help.tabs")),
                 (format!("Alt+1…9 · {}", k(Action::Home)), t.t("help.gotoTab")),
                 (k(Action::CloseTab), t.t("help.closeTab")),
@@ -559,6 +568,7 @@ fn draw_help(f: &mut Frame, app: &App) {
         }
         lines.push(Line::raw(""));
     }
+    lines.push(hint(format!(" {}", t.t("help.mouse"))));
     lines.push(hint(format!(" {}", t.t("help.config"))));
     let area = popup_area(f.area(), 90, lines.len() as u16 + 2);
     f.render_widget(Clear, area);
@@ -577,6 +587,58 @@ mod tests {
             .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>().trim_end().to_string())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// The mouse wheel over a terminal must scroll its history, not send ↑↓ to the program
+    /// (agents use ↑↓ for their prompt history). A click on a tab switches to it.
+    #[test]
+    fn wheel_scrolls_the_history_and_clicks_switch_tabs() {
+        use ratatui::crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut app = App::new(Config::default(), I18n::new("en"), tx.clone());
+        let mut term = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        term.draw(|f| draw(f, &mut app)).unwrap(); // sets the terminal size of new tabs
+        let launch = if cfg!(windows) {
+            super::super::term::Launch {
+                program: "cmd.exe".into(),
+                args: vec!["/d".into(), "/c".into(), "for /L %i in (1,1,60) do @echo line %i".into()],
+                cwd: None,
+            }
+        } else {
+            super::super::term::Launch {
+                program: "sh".into(),
+                args: vec!["-c".into(), "for i in $(seq 1 60); do echo line $i; done".into()],
+                cwd: None,
+            }
+        };
+        for title in ["one", "two"] {
+            app.tabs.push(super::super::app::Tab {
+                title: title.into(),
+                agent: None,
+                key: title.into(),
+                term: Some(super::super::term::TermTab::spawn(launch.clone(), 18, 70, tx.clone()).unwrap()),
+                error: None,
+                cwd: None,
+                started_ms: 0.0,
+            });
+        }
+        app.active = 1;
+        app.focus_list = false;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < deadline && !app.tabs[0].term.as_ref().unwrap().row_text(16).contains("line") {
+            let _ = rx.recv_timeout(std::time::Duration::from_millis(200));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        term.draw(|f| draw(f, &mut app)).unwrap();
+
+        let area = app.layout.terminal;
+        let at = |kind, column, row| MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE };
+        app.on_mouse(at(MouseEventKind::ScrollUp, area.x + 5, area.y + 5));
+        assert!(app.tabs[0].term.as_ref().unwrap().scroll > 0, "the wheel should scroll the history");
+
+        let (start, _, n) = app.layout.tab_spans[1];
+        app.on_mouse(at(MouseEventKind::Down(MouseButton::Left), start + 1, app.layout.tabs.y));
+        assert_eq!((app.active, n), (2, 2), "clicking the second tab should switch to it");
     }
 
     /// Prints the UI with this machine's real sessions: `cargo test -p resume-ai preview -- --ignored --nocapture`
@@ -618,6 +680,8 @@ mod tests {
             key: "demo".into(),
             term: Some(super::super::term::TermTab::spawn(launch, 28, 120, tx).unwrap()),
             error: None,
+            cwd: None,
+            started_ms: 0.0,
         });
         app.active = 1;
         app.focus_list = false;
