@@ -65,4 +65,5 @@ jobs:
           projectPath: apps/desktop
           tagName: ${{ env.TAG }}
           releaseName: ${{ env.TAG }}
-          args: ${{ matrix.args }}
+          # MSI only accepts numeric versions: pre-releases (v0.1.0-beta.1) ship the NSIS .exe only
+          args: ${{ matrix.args }} ${{ runner.os == 'Windows' && contains(env.TAG, '-') && '--bundles nsis' || '' }}
