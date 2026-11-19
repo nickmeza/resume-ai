@@ -1,10 +1,12 @@
 //! Global shortcuts (work everywhere, also inside agent tabs). Configurable in `config.toml` → `[keys]`.
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use resume_ai_core::organization::View;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
+    SessionView(View),
     NextTab,
     PrevTab,
     /// Switch the keyboard between the sessions list and the terminal
@@ -22,6 +24,10 @@ pub enum Action {
 /// (config name, action, default key). `goto_tab_N` = Alt+N.
 fn defaults() -> Vec<(String, Action, &'static str)> {
     let mut v = vec![
+        ("view_favorites".to_string(), Action::SessionView(View::Favorites), "Alt+F"),
+        ("view_recent".to_string(), Action::SessionView(View::Recent), "Alt+R"),
+        ("view_all".to_string(), Action::SessionView(View::All), "Alt+A"),
+        ("view_hidden".to_string(), Action::SessionView(View::Hidden), "Alt+H"),
         ("toggle_focus".to_string(), Action::ToggleFocus, "Alt+S"),
         ("images".to_string(), Action::Images, "Alt+I"),
         ("next_tab".to_string(), Action::NextTab, "Shift+Right"),

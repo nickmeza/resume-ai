@@ -3,6 +3,7 @@
 use super::keys::{Action, KeyMap};
 use super::term::{Launch, PendingInput, TermTab};
 use crate::config::Config;
+use core::organization::{self, Change, Organization, RECENT_LIMIT, View};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
 use ratatui::widgets::ListState;
@@ -52,6 +53,7 @@ pub struct Tab {
 #[derive(Default)]
 pub struct LayoutAreas {
     pub list: Rect,
+    pub views: [Rect; 4],
     pub tabs: Rect,
     pub terminal: Rect,
     /// (first column, last column + 1, tab number) of each tab in the tab bar
@@ -64,6 +66,8 @@ pub struct App {
     pub cfg: Config,
     agent_cfg: BTreeMap<String, AgentConfig>,
     pub sessions: Vec<Session>,
+    pub organization: Organization,
+    pub view: View,
     pub aliases: BTreeMap<String, String>,
     pub load_errors: Vec<String>,
     pub rows: Vec<Row>,
@@ -93,6 +97,8 @@ impl App {
             cfg,
             t,
             sessions: Vec::new(),
+            organization: Organization::default(),
+            view: View::default(),
             aliases: BTreeMap::new(),
             load_errors: Vec::new(),
             rows: Vec::new(),
@@ -123,6 +129,10 @@ impl App {
             res.errors.iter().map(|e| self.t.tf("list.agentError", &[("agent", &e.agent), ("error", &e.error)])).collect();
         self.sessions = res.sessions;
         self.aliases = aliases::load();
+        match organization::load() {
+            Ok(organization) => self.organization = organization,
+            Err(e) => self.load_errors.push(format!("{e:#}")),
+        }
         self.rebuild();
     }
 
@@ -159,30 +169,29 @@ impl App {
     /// Recomputes the visible rows (grouped by project) keeping the selected session.
     pub fn rebuild(&mut self) {
         let keep = self.selected_session().map(|s| s.key.clone());
-        // Grouped by folder; on Windows "C:\x" and "c:\x\" are the same folder
-        let norm = |p: &Option<String>| {
-            p.as_deref().map(|p| {
-                let p = p.trim_end_matches(['\\', '/']);
-                if cfg!(windows) { p.replace('/', "\\").to_lowercase() } else { p.to_string() }
-            })
-        };
-        let mut groups: Vec<(Option<String>, Option<String>, Vec<usize>)> = Vec::new();
-        for (i, s) in self.sessions.iter().enumerate() {
-            if !self.matches_filters(s, None) || !self.matches_search(s) {
-                continue;
+        let searching = !self.search.trim().is_empty();
+        let visible = self.sessions.iter().enumerate().filter(|(_, s)| {
+            self.organization.includes(&s.key, self.view, searching) && self.matches_filters(s, None) && self.matches_search(s)
+        });
+        let mut rows = Vec::new();
+        if self.view == View::Recent && !searching {
+            rows.extend(visible.take(RECENT_LIMIT).map(|(i, _)| Row::Session(i)));
+        } else {
+            let mut groups: Vec<(Option<String>, Option<String>, Vec<usize>)> = Vec::new();
+            for (i, s) in visible {
+                let key = s.cwd.as_deref().map(organization::project_key);
+                match groups.iter_mut().find(|(k, ..)| *k == key) {
+                    Some((.., items)) => items.push(i),
+                    None => groups.push((key, s.cwd.clone(), vec![i])),
+                }
             }
-            let key = norm(&s.cwd);
-            match groups.iter_mut().find(|(k, ..)| *k == key) {
-                Some((.., items)) => items.push(i),
-                None => groups.push((key, s.cwd.clone(), vec![i])),
+            for (_, cwd, items) in groups {
+                let name = cwd.as_deref().map(basename).unwrap_or_else(|| self.t.t("session.unknownFolder"));
+                rows.push(Row::Group { name, cwd, count: items.len() });
+                rows.extend(items.into_iter().map(Row::Session));
             }
         }
-        self.rows.clear();
-        for (_, cwd, items) in groups {
-            let name = cwd.as_deref().map(basename).unwrap_or_else(|| self.t.t("session.unknownFolder"));
-            self.rows.push(Row::Group { name, cwd, count: items.len() });
-            self.rows.extend(items.into_iter().map(Row::Session));
-        }
+        self.rows = rows;
         let idx = keep
             .and_then(|k| self.rows.iter().position(|r| matches!(r, Row::Session(i) if self.sessions[*i].key == k)))
             .or_else(|| self.rows.iter().position(|r| matches!(r, Row::Session(_))));
@@ -448,6 +457,21 @@ impl App {
 
     // ---------- Session actions ----------
 
+    fn change_organization(&mut self, action: Change) {
+        let Some(s) = self.selected_session() else { return };
+        if matches!(action, Change::HideProject) && s.cwd.is_none() {
+            self.set_status(self.t.t("open.folderMissing"));
+            return;
+        }
+        match organization::change(s, &self.sessions, action) {
+            Ok(organization) => {
+                self.organization = organization;
+                self.rebuild();
+            }
+            Err(e) => self.set_status(format!("{e:#}")),
+        }
+    }
+
     pub fn start_rename(&mut self) {
         if let Some(s) = self.selected_session() {
             self.mode = Mode::Rename { input: self.title_of(s) };
@@ -608,7 +632,9 @@ impl App {
                 }
             }
             MouseEventKind::Down(MouseButton::Left) if !popup => {
-                if let Some(&(_, _, n)) =
+                if let Some(index) = self.layout.views.iter().position(|&area| inside(area)) {
+                    self.on_action(Action::SessionView(View::ALL[index]));
+                } else if let Some(&(_, _, n)) =
                     self.layout.tab_spans.iter().find(|(x0, x1, _)| inside(self.layout.tabs) && col >= *x0 && col < *x1)
                 {
                     self.active = n;
@@ -673,6 +699,12 @@ impl App {
     }
 
     pub fn on_key(&mut self, key: KeyEvent) {
+        if matches!(self.mode, Mode::Search) {
+            if let Some(action @ Action::SessionView(_)) = self.keys.action(&key) {
+                self.on_action(action);
+                return;
+            }
+        }
         // Popups first (they belong to the sessions list, or to closing a tab)
         if !matches!(self.mode, Mode::Normal) {
             self.on_mode_key(key);
@@ -692,6 +724,14 @@ impl App {
     fn on_action(&mut self, action: Action) {
         let n = self.tabs.len();
         match action {
+            Action::SessionView(view) => {
+                self.view = view;
+                self.search.clear();
+                self.mode = Mode::Normal;
+                self.focus_list = true;
+                self.last_click = None;
+                self.rebuild();
+            }
             // Switching tabs always lands in the terminal
             Action::NextTab | Action::PrevTab if n > 0 => {
                 let cur = self.active.max(1) - 1;
@@ -764,6 +804,9 @@ impl App {
                 self.rebuild();
             }
             KeyCode::Char('f') => self.mode = Mode::Filter { cursor: 1 },
+            KeyCode::Char('*') => self.change_organization(Change::Favorite),
+            KeyCode::Char('h') => self.change_organization(Change::Hide),
+            KeyCode::Char('H') if self.view != View::Hidden => self.change_organization(Change::HideProject),
             KeyCode::Char('n') => self.start_new(),
             KeyCode::Char('c') => self.continue_compacted(),
             KeyCode::Char('r') | KeyCode::F(2) => self.start_rename(),

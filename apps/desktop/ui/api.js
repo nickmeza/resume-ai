@@ -29,6 +29,8 @@
     agentInfo: () => invoke('agents_info'),
     detectAgents: () => invoke('agents_detect'),
     listSessions: () => invoke('sessions_list'),
+    loadOrganization: () => invoke('organization_load'),
+    changeOrganization: (key, action) => invoke('organization_change', { key, action }),
     renameSession: (key, title) => invoke('sessions_rename', { key, title }),
     deleteSession: (key) => invoke('sessions_delete', { key }),
     findFork: (key, since) => invoke('sessions_find_fork', { key, since }),

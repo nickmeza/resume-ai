@@ -7,6 +7,7 @@ mod tui;
 
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
+use core::organization::{self, Change, RECENT_LIMIT, View};
 use resume_ai_core::{self as core, i18n::I18n};
 
 #[derive(Parser)]
@@ -30,6 +31,28 @@ enum Command {
         /// Print JSON instead of a table
         #[arg(long)]
         json: bool,
+        /// Show only favorites
+        #[arg(long, conflicts_with_all = ["recent", "hidden"])]
+        favorites: bool,
+        /// Show the five most recent visible sessions
+        #[arg(long, conflicts_with = "hidden")]
+        recent: bool,
+        /// Show hidden sessions
+        #[arg(long)]
+        hidden: bool,
+    },
+    /// Toggle the favorite star for a session
+    Favorite {
+        /// Full session key (agent:id)
+        key: String,
+    },
+    /// Toggle visibility for a session, or hide its project's non-favorites
+    Hide {
+        /// Full session key (agent:id)
+        key: String,
+        /// Hide sessions in the same project while keeping favorites visible
+        #[arg(long)]
+        project: bool,
     },
     /// Show which agents are installed and how many sessions each has
     Agents {
@@ -102,9 +125,23 @@ fn main() -> Result<()> {
         return tui::run(file_cfg, t);
     };
     match command {
-        Command::List { agent, json } => {
+        Command::List { agent, json, favorites, recent, hidden } => {
             let enabled = if agent.is_empty() { file_cfg.enabled() } else { agent };
-            let res = core::list_all(&enabled, &agent_cfg);
+            let mut res = core::list_all(&enabled, &agent_cfg);
+            let organization = organization::load()?;
+            let view = if favorites {
+                View::Favorites
+            } else if hidden {
+                View::Hidden
+            } else if recent {
+                View::Recent
+            } else {
+                View::All
+            };
+            res.sessions.retain(|s| organization.includes(&s.key, view, false));
+            if view == View::Recent {
+                res.sessions.truncate(RECENT_LIMIT);
+            }
             if json {
                 println!("{}", serde_json::to_string_pretty(&res)?);
                 return Ok(());
@@ -124,6 +161,27 @@ fn main() -> Result<()> {
             for e in &res.errors {
                 eprintln!("{}", t.tf("list.agentError", &[("agent", &e.agent), ("error", &e.error)]));
             }
+        }
+        Command::Favorite { ref key } | Command::Hide { ref key, .. } => {
+            let enabled = core::AGENTS.iter().map(|agent| agent.id().to_string()).collect::<Vec<_>>();
+            let res = core::list_all(&enabled, &agent_cfg);
+            let Some(session) = res.sessions.iter().find(|s| &s.key == key) else {
+                bail!(t.t("organize.notFound"));
+            };
+            let action = match command {
+                Command::Favorite { .. } => Change::Favorite,
+                Command::Hide { project: true, .. } => Change::HideProject,
+                _ => Change::Hide,
+            };
+            let updated = organization::change(session, &res.sessions, action)?;
+            let label = match action {
+                Change::Favorite if updated.favorites.contains(key) => "organize.markedFavorite",
+                Change::Favorite => "organize.removedFavorite",
+                Change::Hide if updated.hidden.contains(key) => "organize.sessionHidden",
+                Change::Hide => "organize.sessionRestored",
+                Change::HideProject => "organize.projectHidden",
+            };
+            println!("{}", t.t(label));
         }
         Command::Agents { json } => {
             let det = core::detect_agents(&agent_cfg);

@@ -4,7 +4,11 @@ const t = (key, vars) => window.i18n.t(key, vars);
 const plural = (key, count, vars) => window.i18n.plural(key, count, vars);
 
 // ---------------- Keyboard shortcuts (changed in ⌨) ----------------
+const SESSION_VIEWS = [
+  ['favorites', 'Alt+F'], ['recent', 'Alt+R'], ['all', 'Alt+A'], ['hidden', 'Alt+H'],
+];
 const SHORTCUTS = [
+  ...SESSION_VIEWS.map(([view, def]) => ({ id: `organize.${view}`, def })),
   { id: 'tab.next', def: 'Shift+Right' },
   { id: 'tab.prev', def: 'Shift+Left' },
   { id: 'tab.moveRight', def: 'Ctrl+Shift+Right' },
@@ -22,6 +26,7 @@ const SHORTCUTS = [
 const DEFAULT_SHORTCUTS = Object.fromEntries(SHORTCUTS.map((s) => [s.id, s.def]));
 
 function shortcutLabel(id) {
+  if (id.startsWith('organize.')) return t(id);
   const m = id.match(/^tab\.goto(\d)$/);
   return m ? t('ui.shortcut.tab.goto', { n: m[1] }) : t(`ui.shortcut.${id}`);
 }
@@ -34,6 +39,9 @@ const state = {
   agents: [],            // from agents_info
   agentById: {},
   sessions: [],
+  view: 'recent',
+  favorites: new Set(),
+  hidden: new Set(),
   terms: new Map(),      // key -> { term, fit, wrap, info, alive }
   order: [],             // tab keys, in order
   activeKey: null,
@@ -367,17 +375,57 @@ async function loadSessions() {
   setStatus(t('ui.status.loading'));
   const res = await window.api.listSessions();
   state.sessions = res.sessions;
+  let organizationError = '';
+  const revision = organizationRevision;
+  try {
+    const organization = await window.api.loadOrganization();
+    if (revision === organizationRevision && !organizationPending) setOrganization(organization);
+  } catch (error) {
+    organizationError = ` · ⚠ ${error}`;
+  }
   const err = res.errors.map((e) => `${state.agentById[e.agent]?.name || e.agent}: ${e.error}`).join(' · ');
-  setStatus(plural('agents.sessions', res.sessions.length) + (err ? ` · ⚠ ${err}` : ''));
+  setStatus(plural('agents.sessions', res.sessions.length) + (err ? ` · ⚠ ${err}` : '') + organizationError);
   renderFilters();
+  renderList();
+}
+
+function setOrganization({ favorites, hidden }) {
+  state.favorites = new Set(favorites);
+  state.hidden = new Set(hidden);
+}
+
+let organizationPending = false;
+let organizationRevision = 0;
+async function changeOrganization(s, action) {
+  if (organizationPending) return;
+  organizationPending = true;
+  try {
+    setOrganization(await window.api.changeOrganization(s.key, action));
+    organizationRevision += 1;
+    clearTimeout(state.navTimer);
+    renderList();
+  } catch (error) {
+    setStatus(`⚠ ${error}`);
+  } finally {
+    organizationPending = false;
+  }
+}
+
+function selectSessionView(view) {
+  clearTimeout(state.navTimer);
+  state.view = view;
+  state.cursorKey = null;
+  $('#search').value = '';
   renderList();
 }
 
 /** Groups by folder; on Windows "C:\x" and "c:\x\" are the same folder. */
 function groupSessions(list) {
   const groups = new Map();
+  const windows = /^Win/i.test(globalThis.navigator?.platform || '');
   for (const s of list) {
-    const key = s.cwd ? s.cwd.replace(/[\\/]+$/, '').replace(/\//g, '\\').toLowerCase() : '__none__';
+    const folder = s.cwd?.replace(/[\\/]+$/, '');
+    const key = folder === undefined ? null : windows ? folder.replace(/\//g, '\\').toLowerCase() : folder;
     if (!groups.has(key)) groups.set(key, { key, cwd: s.cwd, name: s.cwd ? basename(s.cwd) : t('ui.group.unknownFolder'), items: [] });
     groups.get(key).items.push(s);
   }
@@ -387,30 +435,54 @@ function groupSessions(list) {
 function renderList() {
   if (state.renaming) return; // don't destroy the text field while typing
   const q = $('#search').value.trim().toLowerCase();
-  const filtered = state.sessions.filter((s) => matchFilters(s) && (!q ||
+  const views = $('#session-views');
+  views.setAttribute('aria-label', t('organize.views'));
+  for (const [view] of SESSION_VIEWS) {
+    let button = views.querySelector(`[data-view="${view}"]`);
+    if (!button) {
+      button = el('button');
+      button.dataset.view = view;
+      button.addEventListener('click', () => selectSessionView(view));
+      views.append(button);
+    }
+    const label = t(`organize.${view}`);
+    button.textContent = label;
+    const shortcut = state.shortcuts[`organize.${view}`];
+    button.title = shortcut ? `${label} (${shortcut})` : label;
+    button.setAttribute('aria-pressed', String(view === state.view));
+  }
+  const filtered = state.sessions.filter((s) => state.hidden.has(s.key) === (state.view === 'hidden')
+    && (q || state.view !== 'favorites' || state.favorites.has(s.key)) && matchFilters(s) && (!q ||
     `${displayTitle(s)} ${s.title} ${s.cwd || ''} ${s.gitBranch || ''} ${s.id} ${state.agentById[s.agent]?.name || ''} ${s.origin || ''} ${s.origin ? originLabel(s.origin) : ''}`.toLowerCase().includes(q)));
 
   const list = $('#list');
   list.replaceChildren();
 
-  for (const g of groupSessions(filtered)) {
-    const group = el('div', 'group' + (state.collapsed.has(g.key) && !q ? ' collapsed' : ''));
-    group.dataset.key = g.key;
-    const header = el('div', 'group-header');
-    header.title = g.cwd || '';
-    header.append(el('span', 'chev', '▾'), el('span', 'name', g.name), el('span', 'count', g.items.length));
-    if (g.cwd) {
-      const btnNew = el('button', null, '＋');
-      btnNew.title = t('ui.group.newSession', { path: g.cwd });
-      btnNew.addEventListener('click', (e) => { e.stopPropagation(); newSessionMenu(e.currentTarget, g.cwd, g.name); });
-      header.append(btnNew);
-      header.addEventListener('contextmenu', (e) => { e.preventDefault(); groupMenu(g, e.clientX, e.clientY); });
+  const recent = !q && state.view === 'recent';
+  const groups = recent ? [{ items: filtered.slice(0, 5) }] : groupSessions(filtered);
+  for (const g of groups) {
+    const group = el('div', 'group');
+    if (!recent) {
+      group.classList.toggle('collapsed', state.collapsed.has(g.key) && !q && state.view === 'all');
+      group.dataset.key = g.key;
+      const header = el('div', 'group-header');
+      header.title = g.cwd || '';
+      header.append(el('span', 'chev', '▾'), el('span', 'name', g.name), el('span', 'count', g.items.length));
+      if (g.cwd) {
+        const btnNew = el('button', null, '＋');
+        btnNew.title = t('ui.group.newSession', { path: g.cwd });
+        btnNew.addEventListener('click', (e) => { e.stopPropagation(); newSessionMenu(e.currentTarget, g.cwd, g.name); });
+        header.append(btnNew);
+        header.addEventListener('contextmenu', (e) => { e.preventDefault(); groupMenu(g, e.clientX, e.clientY); });
+      }
+      header.addEventListener('click', () => {
+        group.classList.toggle('collapsed');
+        if (state.view !== 'all' || q) return;
+        if (group.classList.contains('collapsed')) state.collapsed.add(g.key); else state.collapsed.delete(g.key);
+        localStorage.setItem('collapsed', JSON.stringify([...state.collapsed]));
+      });
+      group.append(header);
     }
-    header.addEventListener('click', () => {
-      group.classList.toggle('collapsed');
-      if (group.classList.contains('collapsed')) state.collapsed.add(g.key); else state.collapsed.delete(g.key);
-      localStorage.setItem('collapsed', JSON.stringify([...state.collapsed]));
-    });
 
     const items = el('div', 'items');
     for (const s of g.items) {
@@ -428,8 +500,19 @@ function renderList() {
       const term = state.terms.get(s.key);
       if (term && term.alive) row.append(el('span', 'dot'));
       row.append(badge(s.agent), el('span', 't', title));
+      const favorite = state.favorites.has(s.key);
+      const star = el('button', 'favorite-star', favorite ? '★' : '☆');
+      star.title = t(favorite ? 'organize.unfavorite' : 'organize.favorite');
+      star.setAttribute('aria-label', star.title);
+      star.setAttribute('aria-pressed', String(favorite));
+      star.addEventListener('click', (e) => {
+        e.stopPropagation();
+        changeOrganization(s, 'favorite');
+      });
+      row.append(star);
       const meta = el('div', 'meta');
       meta.append(el('span', null, timeAgo(s.mtime)));
+      if (recent && s.cwd) meta.append(el('span', 'project-name', basename(s.cwd)));
       // Only non-terminal origins are tagged (VS Code, desktop app…) to keep the list clean
       if (s.origin && s.origin !== 'cli') meta.append(el('span', `origin origin-${s.origin.replace(/[^a-z0-9-]/gi, '')}`, originLabel(s.origin)));
       if (s.gitBranch && s.gitBranch !== 'HEAD') meta.append(el('span', null, `⎇ ${s.gitBranch}`));
@@ -439,7 +522,7 @@ function renderList() {
       item.addEventListener('contextmenu', (e) => { e.preventDefault(); sessionMenu(s, e.clientX, e.clientY); });
       items.append(item);
     }
-    group.append(header, items);
+    group.append(items);
     list.append(group);
   }
 
@@ -517,6 +600,8 @@ function sessionMenu(s, x, y) {
   const compact = compactCommandOf(s.agent);
   showMenu(x, y, [
     { label: t('ui.menu.open'), action: () => openSession(s) },
+    { label: t(state.hidden.has(s.key) ? 'organize.restore' : 'organize.hide'), action: () => changeOrganization(s, 'hide') },
+    ...(s.cwd && !state.hidden.has(s.key) ? [{ label: t('organize.hideProject'), action: () => changeOrganization(s, 'hideProject') }] : []),
     {
       label: a && a.forks ? t('ui.menu.continueFork') : t('ui.menu.continueCompact'),
       sub: a && a.forks ? t('ui.menu.continueForkSub') : t('ui.menu.continueCompactSub'),
@@ -564,6 +649,7 @@ function groupMenu(g, x, y) {
     '-',
     { label: t('ui.menu.openShellHere'), action: () => openShell(g.cwd) },
     { label: t('ui.menu.openFolder'), action: () => window.api.openFolder(g.cwd) },
+    ...(state.view !== 'hidden' ? [{ label: t('organize.hideProject'), action: () => changeOrganization(g.items[0], 'hideProject') }] : []),
   ]);
 }
 
@@ -1320,7 +1406,7 @@ async function closeTab(key) {
   const idx = state.order.indexOf(key);
   state.order.splice(idx, 1);
   if (state.activeKey === key) showTerminal(state.order[Math.min(idx, state.order.length - 1)] || null);
-  else renderTabs();
+  else { renderTabs(); renderList(); }
   renderList();
 }
 
@@ -1455,6 +1541,10 @@ const ACTIONS = {
 };
 
 function runAction(id) {
+  if (id.startsWith('organize.')) {
+    selectSessionView(id.slice('organize.'.length));
+    return;
+  }
   const m = id.match(/^tab\.goto(\d)$/);
   if (m) {
     const key = state.order[Number(m[1]) - 1];

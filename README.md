@@ -108,6 +108,14 @@ Download the installer for your system from the
 Run `resume-ai`. The sessions list is always on the left; the agent you open runs on the right.
 The bottom bar tells you where the keyboard is (**SESSIONS** or **TERMINAL**) and which keys work there.
 
+Desktop and CLI share the same favorites and hidden sessions. The four views below search are
+**Favorites**, **Recent**, **All**, and **Hidden**. Both interactive apps open in **Recent**, which
+shows the five most recently active visible sessions across enabled agents. Search covers the
+visible history from any visible view, and searches hidden sessions from **Hidden**.
+
+In Desktop, click the star beside a session title and use the right-click menu to hide or restore
+a session. The project hide action hides the current sessions in that project while preserving favorites.
+
 **In the sessions list**
 
 | Key | Action |
@@ -117,6 +125,9 @@ The bottom bar tells you where the keyboard is (**SESSIONS** or **TERMINAL**) an
 | `Tab` | Go to the terminal without opening anything |
 | `/` | Search |
 | `f` | Filters (agents, origin) |
+| `*` | Toggle favorite |
+| `h` | Hide the session or restore it from Hidden |
+| `H` | Hide sessions in the selected project, preserving favorites |
 | `n` | New session in the selected project |
 | `c` | Continue compacted |
 | `r` / `F2` | Rename |
@@ -135,6 +146,7 @@ The bottom bar tells you where the keyboard is (**SESSIONS** or **TERMINAL**) an
 |---|---|
 | `Alt+S` | Switch between the sessions list and the terminal |
 | `Alt+I` | Images of the session in the active tab |
+| `Alt+F` / `Alt+R` / `Alt+A` / `Alt+H` | Favorites / Recent / All / Hidden (also in Desktop) |
 | `Shift+←` / `Shift+→` | Previous / next tab |
 | `Alt+1` … `Alt+9` | Go to tab N (`Alt+0`: the sessions list) |
 | `Ctrl+W` | Close the tab |
@@ -148,7 +160,13 @@ reference opens that image. Hold **Shift** while dragging to select text.
 
 ```sh
 resume-ai list                 # table of sessions
-resume-ai list --json          # everything, as JSON
+resume-ai list --json          # visible history, as JSON
+resume-ai list --favorites
+resume-ai list --recent
+resume-ai list --hidden
+resume-ai favorite <agent:id>
+resume-ai hide <agent:id>           # toggle hidden status
+resume-ai hide <agent:id> --project # hide the project's current sessions except favorites
 resume-ai agents               # which agents are installed and how many sessions each has
 resume-ai images <session-id>  # images of a Claude Code session, grouped by message
 resume-ai config setup         # ask the language and list width again

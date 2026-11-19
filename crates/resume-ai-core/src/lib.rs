@@ -6,6 +6,7 @@ pub mod agents;
 pub mod aliases;
 pub mod i18n;
 pub mod model;
+pub mod organization;
 pub mod util;
 
 pub use agents::{ALL as AGENTS, Provider, by_id};

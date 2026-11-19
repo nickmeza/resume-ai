@@ -4,6 +4,7 @@ mod env;
 mod pty;
 
 use base64::Engine;
+use core::organization::{self, Change, Organization};
 use resume_ai_core::{self as core, AgentConfig, ImageMessage, LaunchMode, Session, aliases, i18n::I18n};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -203,6 +204,24 @@ async fn sessions_list(state: State<'_, AppState>) -> Res<core::ListResult> {
 
 fn session(state: &AppState, key: &str) -> Res<Session> {
     state.sessions.lock().unwrap().get(key).cloned().ok_or_else(|| "session not found; reload the list (F5)".to_string())
+}
+
+#[tauri::command]
+fn organization_load() -> Res<Organization> {
+    organization::load().map_err(err)
+}
+
+#[tauri::command]
+fn organization_change(state: State<AppState>, key: String, action: String) -> Res<Organization> {
+    let action = match action.as_str() {
+        "favorite" => Change::Favorite,
+        "hide" => Change::Hide,
+        "hideProject" => Change::HideProject,
+        _ => return Err("Unknown organization action".into()),
+    };
+    let sessions = state.sessions.lock().unwrap();
+    let session = sessions.get(&key).ok_or_else(|| "Session not found".to_string())?;
+    organization::change(session, sessions.values(), action).map_err(err)
 }
 
 #[tauri::command]
@@ -626,6 +645,8 @@ pub fn run() {
             agents_info,
             agents_detect,
             sessions_list,
+            organization_load,
+            organization_change,
             sessions_rename,
             sessions_delete,
             sessions_find_fork,

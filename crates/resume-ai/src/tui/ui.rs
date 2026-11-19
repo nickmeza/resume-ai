@@ -127,9 +127,11 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(block, area);
 
     let filters = app.active_filter_labels();
-    let [_, search_area, chips_area, list_area] = Layout::vertical([
+    let view_rows = if inner.width < 40 { 2 } else { 1 };
+    let [_, search_area, views_area, chips_area, list_area] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
+        Constraint::Length(view_rows),
         Constraint::Length(if filters.is_empty() { 0 } else { 1 }),
         Constraint::Min(1),
     ])
@@ -145,6 +147,22 @@ fn draw_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
         line.push(Span::raw(app.search.clone()));
     }
     f.render_widget(Paragraph::new(Line::from(line)), search_area);
+    let tabs = if view_rows == 1 {
+        Layout::horizontal([Constraint::Ratio(1, 4); 4]).areas(views_area)
+    } else {
+        let [top, bottom] = Layout::vertical([Constraint::Length(1); 2]).areas(views_area);
+        let [favorites, recent] = Layout::horizontal([Constraint::Ratio(1, 2); 2]).areas(top);
+        let [all, hidden] = Layout::horizontal([Constraint::Ratio(1, 2); 2]).areas(bottom);
+        [favorites, recent, all, hidden]
+    };
+    app.layout.views = tabs;
+    for (view, area) in core::organization::View::ALL.into_iter().zip(tabs.iter().copied()) {
+        let mut style = Style::default().fg(MUTED);
+        if view == app.view {
+            style = style.fg(ACCENT).add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
+        }
+        f.render_widget(Paragraph::new(fit(&app.t.t(view.label()), area.width as usize)).centered().style(style), area);
+    }
     if searching {
         f.set_cursor_position(Position::new(search_area.x + 3 + app.search.width() as u16, search_area.y));
     }
@@ -213,13 +231,16 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     }
                 }
                 let meta = parts.join("  ");
-                let title_width = width.saturating_sub(3 + 5 + meta.width() + 2);
+                let favorite = app.organization.favorites.contains(&s.key);
+                let marker_width = usize::from(favorite) * 2;
+                let title_width = width.saturating_sub(3 + 5 + meta.width() + 2 + marker_width);
                 let title = fit(&app.title_of(s), title_width);
-                let pad = width.saturating_sub(3 + 5 + title.width() + meta.width());
+                let pad = width.saturating_sub(3 + 5 + title.width() + meta.width() + marker_width);
                 ListItem::new(Line::from(vec![
                     dot,
                     badge(&s.agent),
                     Span::raw(" "),
+                    Span::styled(if favorite { "★ " } else { "" }, Style::default().fg(ACCENT)),
                     Span::raw(title),
                     Span::raw(" ".repeat(pad)),
                     Span::styled(meta, Style::default().fg(MUTED)),
@@ -536,6 +557,9 @@ fn draw_help(f: &mut Frame, app: &App) {
                 ("Enter".into(), t.t("help.open")),
                 ("/".into(), t.t("help.search")),
                 ("f".into(), t.t("help.filters")),
+                ("*".into(), t.t("organize.favoriteToggle")),
+                ("h".into(), t.t("organize.hideToggle")),
+                ("H".into(), t.t("organize.hideProject")),
                 ("n".into(), t.t("help.new")),
                 ("c".into(), t.t("help.compact")),
                 ("r / F2".into(), t.t("help.rename")),
@@ -553,6 +577,7 @@ fn draw_help(f: &mut Frame, app: &App) {
             vec![
                 (format!("{} · Tab", k(Action::ToggleFocus)), t.t("help.focus")),
                 (k(Action::Images), t.t("help.tabImages")),
+                (core::organization::View::ALL.map(|view| k(Action::SessionView(view))).join(" "), t.t("organize.views")),
                 (format!("{} / {}", k(Action::PrevTab), k(Action::NextTab)), t.t("help.tabs")),
                 (format!("Alt+1…9 · {}", k(Action::Home)), t.t("help.gotoTab")),
                 (k(Action::CloseTab), t.t("help.closeTab")),
