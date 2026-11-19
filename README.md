@@ -149,6 +149,11 @@ a session. The project hide action hides the current sessions in that project wh
 | `Alt+F` / `Alt+R` / `Alt+A` / `Alt+H` | Favorites / Recent / All / Hidden (also in Desktop) |
 | `Shift+←` / `Shift+→` | Previous / next tab |
 | `Alt+1` … `Alt+9` | Go to tab N (`Alt+0`: the sessions list) |
+
+On macOS, use `F8` to switch focus, `F9` for session images, and `F10` to return to the sessions list.
+Use `F3`, `F4`, `F6`, and `F7` for Favorites, Recent, All, and Hidden, respectively.
+Use `Shift+←/→` to switch tabs, or assign direct tab shortcuts with `goto_tab_1` through
+`goto_tab_9` in the `[keys]` configuration.
 | `Ctrl+W` | Close the tab |
 | `Shift+PgUp` / `Shift+PgDn` | Scroll the terminal history |
 

@@ -77,7 +77,11 @@
   "time.days": "hace {n} d",
 
   "tab.error": "No se pudo iniciar: {error}",
-  "tab.errorHint": "Revisa el comando del agente con `resume-ai agents`. Enter cierra esta pestaña.",
+  "tab.errorHint": "Enter: reintentar · Esc: cerrar pestaña",
+  "tab.agentMissing": "Puede que {agent} no esté instalado. No se encontró «{command}».",
+  "tab.commandMissing": "No se encontró el comando «{command}».",
+  "tab.installGuide": "Guía oficial de instalación",
+  "tab.pathHint": "Si ya lo instalaste, verifica el PATH en una terminal nueva y vuelve a abrir resume-ai.",
   "tab.exited": "El proceso terminó (código {code}). Enter: reiniciar · {close}: cerrar",
   "tab.scrolled": "Historial: {n} líneas arriba · cualquier tecla vuelve",
 
@@ -155,7 +159,9 @@
   "help.reload": "Recargar la lista",
   "help.quit": "Salir",
   "help.tabs": "Pestaña anterior / siguiente",
-  "help.gotoTab": "Ir a la pestaña N · lista de sesiones",
+  "help.gotoTab": "Ir a la pestaña N",
+  "help.gotoTabNumber": "Ir a la pestaña {tab}",
+  "help.home": "Ir a la lista de sesiones",
   "help.closeTab": "Cerrar pestaña",
   "help.scroll": "Recorrer el historial de la terminal",
   "help.config": "Cambia atajos e idioma en el archivo de configuración: resume-ai config path",

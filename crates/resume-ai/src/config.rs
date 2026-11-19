@@ -29,7 +29,7 @@ sidebar_percent = 25
 # compact_command = "/compact"   # "" disables "continue compacted"
 
 # Global shortcuts of the interactive mode (work inside agent tabs too). "" disables one.
-# goto_tab_1 … goto_tab_9 default to Alt+1 … Alt+9.
+# Use goto_tab_1 through goto_tab_9 to customize direct tab navigation.
 # [keys]
 "#;
 

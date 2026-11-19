@@ -21,8 +21,8 @@ pub enum Action {
     ScrollDown,
 }
 
-/// (config name, action, default key). `goto_tab_N` = Alt+N.
-fn defaults() -> Vec<(String, Action, &'static str)> {
+/// (config name, action, default key).
+fn defaults(macos: bool) -> Vec<(String, Action, &'static str)> {
     let mut v = vec![
         ("view_favorites".to_string(), Action::SessionView(View::Favorites), "Alt+F"),
         ("view_recent".to_string(), Action::SessionView(View::Recent), "Alt+R"),
@@ -41,12 +41,27 @@ fn defaults() -> Vec<(String, Action, &'static str)> {
     for (i, key) in ALT.iter().enumerate() {
         v.push((format!("goto_tab_{}", i + 1), Action::GotoTab(i as u8 + 1), key));
     }
+    if macos {
+        for (_, action, key) in &mut v {
+            *key = match action {
+                Action::SessionView(View::Favorites) => "F3",
+                Action::SessionView(View::Recent) => "F4",
+                Action::SessionView(View::All) => "F6",
+                Action::SessionView(View::Hidden) => "F7",
+                Action::ToggleFocus => "F8",
+                Action::Images => "F9",
+                Action::Home => "F10",
+                Action::GotoTab(_) => "",
+                _ => *key,
+            };
+        }
+    }
     v
 }
 
 /// Template lines for the config file.
 pub fn template() -> String {
-    defaults()
+    defaults(cfg!(target_os = "macos"))
         .iter()
         .filter(|(n, ..)| !n.starts_with("goto_tab_") || n == "goto_tab_1")
         .map(|(n, _, k)| format!("# {n} = \"{k}\"\n"))
@@ -114,7 +129,11 @@ pub struct KeyMap {
 impl KeyMap {
     /// Defaults overridden by the `[keys]` table (an empty string disables a shortcut).
     pub fn new(user: &BTreeMap<String, String>) -> Self {
-        let bindings = defaults()
+        Self::for_platform(user, cfg!(target_os = "macos"))
+    }
+
+    fn for_platform(user: &BTreeMap<String, String>, macos: bool) -> Self {
+        let bindings = defaults(macos)
             .into_iter()
             .filter_map(|(name, action, default)| {
                 let spec = user.get(&name).map(String::as_str).unwrap_or(default);
@@ -130,7 +149,11 @@ impl KeyMap {
 
     /// Label of the key bound to an action (for hints), or "—".
     pub fn label(&self, action: Action) -> String {
-        self.bindings.iter().find(|(a, _)| *a == action).map(|(_, b)| b.label.clone()).unwrap_or_else(|| "—".into())
+        self.bound_label(action).unwrap_or("—").to_string()
+    }
+
+    pub fn bound_label(&self, action: Action) -> Option<&str> {
+        self.bindings.iter().find(|(a, _)| *a == action).map(|(_, b)| b.label.as_str())
     }
 }
 
@@ -140,8 +163,10 @@ mod tests {
 
     #[test]
     fn parses_and_matches() {
-        let km =
-            KeyMap::new(&BTreeMap::from([("close_tab".to_string(), "Ctrl+Q".to_string()), ("home".to_string(), String::new())]));
+        let km = KeyMap::for_platform(
+            &BTreeMap::from([("close_tab".to_string(), "Ctrl+Q".to_string()), ("home".to_string(), String::new())]),
+            false,
+        );
         let ev = |c, m| KeyEvent::new(c, m);
         assert_eq!(km.action(&ev(KeyCode::Right, KeyModifiers::SHIFT)), Some(Action::NextTab));
         assert_eq!(km.action(&ev(KeyCode::Char('3'), KeyModifiers::ALT)), Some(Action::GotoTab(3)));
@@ -151,5 +176,16 @@ mod tests {
         assert_eq!(km.action(&ev(KeyCode::Right, KeyModifiers::NONE)), None);
         assert_eq!(parse("F12").unwrap().code, KeyCode::F(12));
         assert!(parse("Ctrl+Nope").is_none());
+    }
+
+    #[test]
+    fn macos_shortcuts_work_without_option() {
+        let overrides = BTreeMap::from([("goto_tab_3".to_string(), "Ctrl+3".to_string())]);
+        let keys = KeyMap::for_platform(&overrides, true);
+        let focus = KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE);
+        assert_eq!(keys.action(&focus), Some(Action::ToggleFocus));
+        assert_eq!(keys.bound_label(Action::ToggleFocus), Some("F8"));
+        assert_eq!(keys.bound_label(Action::GotoTab(1)), None);
+        assert_eq!(keys.bound_label(Action::GotoTab(3)), Some("Ctrl+3"));
     }
 }

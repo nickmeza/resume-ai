@@ -43,7 +43,8 @@ pub struct Tab {
     /// Session key (`claude:<id>`), or `new:…` / `compact:…` / `shell:…`.
     pub key: String,
     pub term: Option<TermTab>,
-    pub error: Option<String>,
+    pub error: Option<anyhow::Error>,
+    pub launch: Launch,
     /// Project folder and start time: to find the Claude session of a new tab (its id is not known yet)
     pub cwd: Option<String>,
     pub started_ms: f64,
@@ -282,15 +283,15 @@ impl App {
 
     // ---------- Tabs ----------
 
-    fn spawn_tab(&mut self, title: String, agent: Option<String>, key: String, launch: Launch) -> usize {
+    pub(super) fn spawn_tab(&mut self, title: String, agent: Option<String>, key: String, launch: Launch) -> usize {
         let (rows, cols) = self.term_size;
         let cwd = launch.cwd.as_ref().map(|c| c.display().to_string());
         let started_ms = chrono::Utc::now().timestamp_millis() as f64;
-        let (term, error) = match TermTab::spawn(launch, rows, cols, self.notify.clone()) {
+        let (term, error) = match TermTab::spawn(&launch, rows, cols, self.notify.clone()) {
             Ok(t) => (Some(t), None),
-            Err(e) => (None, Some(format!("{e:#}"))),
+            Err(e) => (None, Some(e)),
         };
-        self.tabs.push(Tab { title, agent, key, term, error, cwd, started_ms });
+        self.tabs.push(Tab { title, agent, key, term, error, launch, cwd, started_ms });
         self.active = self.tabs.len();
         self.focus_list = false; // a new tab is ready to type in
         self.active
@@ -368,7 +369,10 @@ impl App {
         let program = if cfg!(windows) {
             std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into())
         } else {
-            std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())
+            std::env::var("SHELL")
+                .ok()
+                .filter(|shell| !shell.trim().is_empty())
+                .unwrap_or_else(|| if cfg!(target_os = "macos") { "/bin/zsh".into() } else { "/bin/sh".into() })
         };
         self.counter += 1;
         let title = format!("{} · {}", self.t.t("shell.title"), cwd.as_deref().map(basename).unwrap_or_else(|| "~".into()));
@@ -383,18 +387,14 @@ impl App {
     pub fn restart_tab(&mut self, n: usize) {
         let notify = self.notify.clone();
         let (rows, cols) = self.term_size;
-        let Some(tab) = self.tabs.get_mut(n - 1) else { return };
-        let launch = match &tab.term {
-            Some(t) => t.launch.clone(),
-            None => return,
-        };
+        let Some(tab) = n.checked_sub(1).and_then(|index| self.tabs.get_mut(index)) else { return };
         tab.term = None; // drops (kills) the old process first
-        match TermTab::spawn(launch, rows, cols, notify) {
+        match TermTab::spawn(&tab.launch, rows, cols, notify) {
             Ok(t) => {
                 tab.term = Some(t);
                 tab.error = None;
             }
-            Err(e) => tab.error = Some(format!("{e:#}")),
+            Err(e) => tab.error = Some(e),
         }
     }
 
@@ -541,7 +541,7 @@ impl App {
         self.open_images_popup(&s, title);
     }
 
-    /// Images of the session open in the active tab (Alt+I), also for new tabs once Claude saved them.
+    /// Images of the session open in the active tab, also for new tabs once Claude saved them.
     pub fn show_tab_images(&mut self) {
         let Some(tab) = self.active.checked_sub(1).and_then(|i| self.tabs.get(i)) else { return };
         let title = tab.title.clone();
@@ -767,7 +767,9 @@ impl App {
         let n = self.active;
         let tab = &mut self.tabs[n - 1];
         let Some(term) = tab.term.as_mut() else {
-            if key.code == KeyCode::Enter && tab.error.is_some() {
+            if key.code == KeyCode::Enter {
+                self.restart_tab(n);
+            } else if key.code == KeyCode::Esc {
                 self.close_tab(n);
             }
             return;

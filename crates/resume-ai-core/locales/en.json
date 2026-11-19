@@ -77,7 +77,11 @@
   "time.days": "{n} d ago",
 
   "tab.error": "Could not start: {error}",
-  "tab.errorHint": "Check the agent's command with `resume-ai agents`. Enter closes this tab.",
+  "tab.errorHint": "Enter: retry · Esc: close tab",
+  "tab.agentMissing": "{agent} may not be installed. Could not find “{command}”.",
+  "tab.commandMissing": "Could not find the “{command}” command.",
+  "tab.installGuide": "Official installation guide",
+  "tab.pathHint": "If you already installed it, check PATH in a new terminal and reopen resume-ai.",
   "tab.exited": "Process exited (code {code}). Enter: restart · {close}: close",
   "tab.scrolled": "History: {n} lines up · any key returns",
 
@@ -155,7 +159,9 @@
   "help.reload": "Reload the list",
   "help.quit": "Quit",
   "help.tabs": "Previous / next tab",
-  "help.gotoTab": "Go to tab N · sessions list",
+  "help.gotoTab": "Go to tab N",
+  "help.gotoTabNumber": "Go to tab {tab}",
+  "help.home": "Go to the sessions list",
   "help.closeTab": "Close tab",
   "help.scroll": "Scroll the terminal history",
   "help.config": "Change shortcuts and language in the config file: resume-ai config path",

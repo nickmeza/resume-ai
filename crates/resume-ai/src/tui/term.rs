@@ -1,7 +1,7 @@
 //! Embedded terminal (like Neovim's `:terminal`): runs an agent in a pseudo-terminal, keeps its
 //! screen in a `vt100` parser and draws it inside the TUI.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -22,6 +22,17 @@ pub struct Launch {
     pub cwd: Option<PathBuf>,
 }
 
+#[derive(Debug)]
+pub struct CommandNotFound(pub String);
+
+impl std::fmt::Display for CommandNotFound {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "command not found: {}", self.0)
+    }
+}
+
+impl std::error::Error for CommandNotFound {}
+
 /// A command that will be typed into the agent once it finishes loading (e.g. `/compact`).
 pub struct PendingInput {
     pub text: String,
@@ -30,7 +41,6 @@ pub struct PendingInput {
 }
 
 pub struct TermTab {
-    pub launch: Launch,
     parser: Arc<Mutex<vt100::Parser>>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     master: Box<dyn MasterPty + Send>,
@@ -50,9 +60,7 @@ fn now_ms() -> u64 {
 
 /// On Windows, `.cmd`/`.bat` shims (npm-installed agents) must run through `cmd.exe`.
 fn resolve(launch: &Launch) -> Result<(String, Vec<String>)> {
-    let Some(path) = resume_ai_core::which(&launch.program) else {
-        bail!("command not found: {}", launch.program);
-    };
+    let path = resume_ai_core::which(&launch.program).ok_or_else(|| CommandNotFound(launch.program.clone()))?;
     let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
     if cfg!(windows) && (ext == "cmd" || ext == "bat") {
         let mut args = vec!["/d".to_string(), "/c".to_string(), path.display().to_string()];
@@ -93,9 +101,9 @@ fn answer_queries(chunk: &[u8], tail: &mut Vec<u8>, parser: &Mutex<vt100::Parser
 }
 
 impl TermTab {
-    pub fn spawn(launch: Launch, rows: u16, cols: u16, notify: Sender<()>) -> Result<Self> {
+    pub fn spawn(launch: &Launch, rows: u16, cols: u16, notify: Sender<()>) -> Result<Self> {
         let (rows, cols) = (rows.max(2), cols.max(10));
-        let (program, args) = resolve(&launch)?;
+        let (program, args) = resolve(launch)?;
         let pair = native_pty_system().openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })?;
         let mut cmd = CommandBuilder::new(&program);
         cmd.args(&args);
@@ -133,7 +141,6 @@ impl TermTab {
             });
         }
         Ok(TermTab {
-            launch,
             parser,
             writer,
             master: pair.master,
@@ -430,7 +437,7 @@ mod tests {
         } else {
             Launch { program: "sh".into(), args: vec!["-c".into(), "echo hello-from-pty".into()], cwd: None }
         };
-        let mut tab = TermTab::spawn(launch, 10, 60, tx).unwrap();
+        let mut tab = TermTab::spawn(&launch, 10, 60, tx).unwrap();
         let deadline = Instant::now() + std::time::Duration::from_secs(10);
         while Instant::now() < deadline && !tab.parser.lock().unwrap().screen().contents().contains("hello-from-pty") {
             let _ = rx.recv_timeout(std::time::Duration::from_millis(200));

@@ -2,6 +2,7 @@
 
 use super::app::{App, FilterRow, Mode, Row};
 use super::keys::Action;
+use super::term::CommandNotFound;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -301,15 +302,26 @@ fn draw_tab(f: &mut Frame, app: &mut App, area: Rect) {
     let close = app.keys.label(Action::CloseTab);
     let tab = &mut app.tabs[idx];
     let Some(term) = tab.term.as_mut() else {
-        let msg = t.tf("tab.error", &[("error", &tab.error.clone().unwrap_or_default())]);
-        let p = Paragraph::new(vec![
-            Line::raw(""),
-            Line::styled(msg, Style::default().fg(WARN)),
-            Line::raw(""),
-            Line::styled(t.t("tab.errorHint"), Style::default().fg(MUTED)),
-        ])
-        .alignment(Alignment::Center)
-        .wrap(Wrap { trim: true });
+        let mut lines = vec![Line::raw("")];
+        if let Some(error) = &tab.error {
+            if let Some(CommandNotFound(program)) = error.downcast_ref::<CommandNotFound>() {
+                let agent = tab.agent.as_deref().and_then(core::by_id);
+                let message = match agent {
+                    Some(agent) => t.tf("tab.agentMissing", &[("agent", &agent.name()), ("command", program)]),
+                    None => t.tf("tab.commandMissing", &[("command", program)]),
+                };
+                lines.push(Line::styled(message, Style::default().fg(WARN)));
+                if tab.agent.as_deref() == Some("claude") {
+                    lines.push(Line::raw(t.t("tab.installGuide")));
+                    lines.push(Line::styled("https://code.claude.com/docs/en/quickstart", Style::default().fg(ACCENT)));
+                }
+                lines.push(Line::raw(t.t("tab.pathHint")));
+            } else {
+                lines.push(Line::styled(t.tf("tab.error", &[("error", &format!("{error:#}"))]), Style::default().fg(WARN)));
+            }
+        }
+        lines.push(Line::styled(t.t("tab.errorHint"), Style::default().fg(MUTED)));
+        let p = Paragraph::new(lines).alignment(Alignment::Center).wrap(Wrap { trim: true });
         f.render_widget(p, area);
         return;
     };
@@ -549,6 +561,20 @@ fn confirm(f: &mut Frame, title: String, question: String, note: String) {
 fn draw_help(f: &mut Frame, app: &App) {
     let t = &app.t;
     let k = |a| app.keys.label(a);
+    let tab_keys = (1..=9).filter_map(|tab| app.keys.bound_label(Action::GotoTab(tab))).collect::<Vec<_>>();
+    let mut tab_rows = Vec::new();
+    if tab_keys.iter().copied().eq(["Alt+1", "Alt+2", "Alt+3", "Alt+4", "Alt+5", "Alt+6", "Alt+7", "Alt+8", "Alt+9"]) {
+        tab_rows.push(("Alt+1…9".into(), t.t("help.gotoTab")));
+    } else {
+        for tab in 1..=9 {
+            if let Some(key) = app.keys.bound_label(Action::GotoTab(tab)) {
+                tab_rows.push((key.into(), t.tf("help.gotoTabNumber", &[("tab", &tab.to_string())])));
+            }
+        }
+    }
+    if let Some(key) = app.keys.bound_label(Action::Home) {
+        tab_rows.push((key.into(), t.t("help.home")));
+    }
     let sections: Vec<(String, Vec<(String, String)>)> = vec![
         (
             t.t("help.list"),
@@ -579,10 +605,12 @@ fn draw_help(f: &mut Frame, app: &App) {
                 (k(Action::Images), t.t("help.tabImages")),
                 (core::organization::View::ALL.map(|view| k(Action::SessionView(view))).join(" "), t.t("organize.views")),
                 (format!("{} / {}", k(Action::PrevTab), k(Action::NextTab)), t.t("help.tabs")),
-                (format!("Alt+1…9 · {}", k(Action::Home)), t.t("help.gotoTab")),
                 (k(Action::CloseTab), t.t("help.closeTab")),
                 (format!("{} / {}", k(Action::ScrollUp), k(Action::ScrollDown)), t.t("help.scroll")),
-            ],
+            ]
+            .into_iter()
+            .chain(tab_rows)
+            .collect(),
         ),
     ];
     let mut lines = Vec::new();
@@ -637,15 +665,7 @@ mod tests {
             }
         };
         for title in ["one", "two"] {
-            app.tabs.push(super::super::app::Tab {
-                title: title.into(),
-                agent: None,
-                key: title.into(),
-                term: Some(super::super::term::TermTab::spawn(launch.clone(), 18, 70, tx.clone()).unwrap()),
-                error: None,
-                cwd: None,
-                started_ms: 0.0,
-            });
+            app.spawn_tab(title.into(), None, title.into(), launch.clone());
         }
         app.active = 1;
         app.focus_list = false;
@@ -666,11 +686,38 @@ mod tests {
         assert_eq!((app.active, n), (2, 2), "clicking the second tab should switch to it");
     }
 
+    #[test]
+    fn missing_claude_shows_install_guide_and_keeps_tab_on_retry() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let (tx, _) = std::sync::mpsc::channel();
+        let mut app = App::new(Config::default(), I18n::new("es"), tx);
+        let mut terminal = Terminal::new(TestBackend::new(120, 20)).unwrap();
+        let program = "resume-ai-test-missing-claude".to_string();
+        app.spawn_tab(
+            "Claude".into(),
+            Some("claude".into()),
+            "test".into(),
+            super::super::term::Launch { program: program.clone(), args: vec!["--resume".into(), "test".into()], cwd: None },
+        );
+        terminal.draw(|f| draw(f, &mut app)).unwrap();
+        let output = dump(&terminal);
+        assert!(output.contains("Puede que Claude Code"));
+        assert!(output.contains("https://code.claude.com/docs/en/quickstart"));
+
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.tabs[0].launch.program, program);
+        assert_eq!(app.tabs[0].launch.args, ["--resume", "test"]);
+        assert!(app.tabs[0].error.as_ref().unwrap().is::<CommandNotFound>());
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.tabs.is_empty());
+    }
+
     /// Prints the UI with this machine's real sessions: `cargo test -p resume-ai preview -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn preview() {
-        let (tx, _rx) = std::sync::mpsc::channel();
+        let (tx, rx) = std::sync::mpsc::channel();
         let lang = std::env::var("PREVIEW_LANG").unwrap_or_else(|_| "es".into());
         let mut app = App::new(Config::default(), I18n::new(&lang), tx);
         let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
@@ -698,16 +745,7 @@ mod tests {
                 cwd: None,
             }
         };
-        let (tx, rx) = std::sync::mpsc::channel();
-        app.tabs.push(super::super::app::Tab {
-            title: "demo".into(),
-            agent: Some("claude".into()),
-            key: "demo".into(),
-            term: Some(super::super::term::TermTab::spawn(launch, 28, 120, tx).unwrap()),
-            error: None,
-            cwd: None,
-            started_ms: 0.0,
-        });
+        app.spawn_tab("demo".into(), Some("claude".into()), "demo".into(), launch);
         app.active = 1;
         app.focus_list = false;
         let _ = rx.recv_timeout(std::time::Duration::from_secs(5));
