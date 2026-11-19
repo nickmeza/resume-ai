@@ -276,6 +276,27 @@ npm run dev                  # desktop app in development
 npm run build                # installers in target/release/bundle/
 ```
 
+### Windows Store MSIX
+
+Install the Windows SDK and build the desktop app first. From the repository root, pass the
+three values shown under **Product identity** in Microsoft Partner Center:
+
+```powershell
+./apps/desktop/scripts/package-msix.ps1 `
+  -PackageName '<Name>' `
+  -Publisher '<Publisher, including CN=>' `
+  -PublisherDisplayName '<PublisherDisplayName>'
+```
+
+The unsigned x64 package is written to `target/release/bundle/msix/` for submission to the
+Microsoft Store. Test it as a packaged app before submitting, including session discovery,
+terminal launch and sharing preferences with the CLI.
+
+To enable packaging on stable releases, set the repository Actions variables
+`MSIX_PACKAGE_NAME`, `MSIX_PUBLISHER` and `MSIX_PUBLISHER_DISPLAY_NAME` to the same values.
+The Windows job in **Desktop release** saves the package as the `resume-ai-windows-store`
+workflow artifact for upload in Partner Center.
+
 Releases are built by GitHub Actions when a `v*` tag is pushed (cargo-dist for the command line,
 tauri-action for the desktop app). Adding an agent means one file in `crates/resume-ai-core/src/agents/`
 implementing the `Provider` trait. Translations live in `crates/resume-ai-core/locales/`; a test makes
